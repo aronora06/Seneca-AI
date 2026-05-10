@@ -1,0 +1,55 @@
+/**
+ * Centralized env loader. We keep this in one place so missing variables
+ * surface a clear error at boot rather than a confusing runtime crash.
+ *
+ * Supabase variables are only required when DEV_BYPASS_AUTH is off. In
+ * bypass mode we use an in-memory session store and a fixed "dev" user,
+ * which lets you run the whole app with just an Anthropic key.
+ */
+
+function required(name: string): string {
+  const v = process.env[name];
+  if (!v || v.trim() === "") {
+    throw new Error(
+      `Missing required env var ${name}. Copy apps/api/.env.example to apps/api/.env and fill it in.`,
+    );
+  }
+  return v;
+}
+
+function optional(name: string, fallback: string): string {
+  const v = process.env[name];
+  return v && v.trim() !== "" ? v : fallback;
+}
+
+function bool(name: string, fallback: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined || v.trim() === "") return fallback;
+  return /^(1|true|yes|on)$/i.test(v.trim());
+}
+
+const devBypassAuth = bool("DEV_BYPASS_AUTH", false);
+
+export const env = {
+  port: Number(optional("PORT", "8787")),
+  webOrigin: optional("WEB_ORIGIN", "http://localhost:5173"),
+
+  devBypassAuth,
+  /** Stable fake user id used when devBypassAuth is on. */
+  devUserId: optional("DEV_USER_ID", "00000000-0000-0000-0000-000000000001"),
+  devUserEmail: optional("DEV_USER_EMAIL", "dev@local"),
+
+  anthropicApiKey: required("ANTHROPIC_API_KEY"),
+  anthropicTextModel: optional("ANTHROPIC_TEXT_MODEL", "claude-sonnet-4-6"),
+  anthropicVisionModel: optional("ANTHROPIC_VISION_MODEL", "claude-opus-4-7"),
+
+  supabaseUrl: devBypassAuth
+    ? optional("SUPABASE_URL", "")
+    : required("SUPABASE_URL"),
+  supabaseAnonKey: devBypassAuth
+    ? optional("SUPABASE_ANON_KEY", "")
+    : required("SUPABASE_ANON_KEY"),
+  supabaseServiceRoleKey: devBypassAuth
+    ? optional("SUPABASE_SERVICE_ROLE_KEY", "")
+    : required("SUPABASE_SERVICE_ROLE_KEY"),
+} as const;

@@ -1,0 +1,130 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Semantic theme tokens. Components reference these via Tailwind classes
+ * like `bg-surface`, `text-fg-muted`, `border-border`, etc. To add a new
+ * theme, define another selector that overrides --c-* values. Values are
+ * raw RGB triples (no # or rgb() wrapper) so Tailwind's `<alpha-value>`
+ * substitution works.
+ */
+@layer base {
+  :root,
+  .light {
+    --c-surface: 248 246 241;       /* ink-50 */
+    --c-surface-sunk: 239 234 224;  /* ink-100 */
+    --c-card: 255 255 255;
+    --c-border: 223 214 196;        /* ink-200 */
+    --c-fg: 26 20 14;               /* ink-900 */
+    --c-fg-muted: 77 63 45;         /* ink-700 */
+    --c-fg-subtle: 138 115 85;      /* ink-500 */
+    --c-fg-on: 248 246 241;         /* on dark surfaces */
+    --c-accent: 212 154 71;         /* ember-500 */
+    --c-accent-soft: 232 184 115;   /* ember-400 */
+    --c-accent-fg: 26 20 14;
+    --c-danger: 220 38 38;          /* red-600 */
+    --c-danger-soft: 254 226 226;   /* red-100 */
+    --c-danger-fg: 127 29 29;       /* red-900 */
+    --c-ok: 22 163 74;              /* emerald-600 */
+    --c-ok-soft: 220 252 231;       /* emerald-100 */
+  }
+
+  .dark {
+    --c-surface: 14 10 6;            /* near ink-950 */
+    --c-surface-sunk: 26 20 14;      /* ink-900 */
+    --c-card: 30 24 17;              /* between ink-900 and ink-800 */
+    --c-border: 51 41 29;            /* ink-800 */
+    --c-fg: 239 234 224;             /* ink-100 */
+    --c-fg-muted: 200 186 161;       /* between ink-200 and ink-300 */
+    --c-fg-subtle: 168 147 115;      /* ink-400 */
+    --c-fg-on: 14 10 6;
+    --c-accent: 232 184 115;         /* ember-400 — slightly brighter in dark */
+    --c-accent-soft: 132 100 64;
+    --c-accent-fg: 14 10 6;
+    --c-danger: 248 113 113;          /* red-400 */
+    --c-danger-soft: 76 29 29;        /* red-950ish */
+    --c-danger-fg: 254 226 226;
+    --c-ok: 74 222 128;               /* emerald-400 */
+    --c-ok-soft: 5 46 22;             /* emerald-950ish */
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: rgb(var(--c-surface));
+    color: rgb(var(--c-fg));
+    background-image: radial-gradient(
+        ellipse at top,
+        rgb(var(--c-accent) / 0.06),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse at bottom right,
+        rgb(var(--c-fg-muted) / 0.04),
+        transparent 50%
+      );
+    background-attachment: fixed;
+  }
+
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-fg text-fg-on hover:opacity-90;
+  }
+
+  .btn-ghost {
+    @apply btn text-fg-muted hover:bg-surface-sunk hover:text-fg;
+  }
+
+  .btn-soft {
+    @apply btn border border-border bg-card text-fg-muted hover:text-fg hover:bg-surface-sunk;
+  }
+
+  .input {
+    @apply block w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-fg placeholder-fg-subtle shadow-inner focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
+  }
+
+  .card {
+    @apply rounded-lg border border-border bg-card/80 shadow-soft backdrop-blur dark:shadow-soft-dark;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-sunk px-2 py-0.5 text-[11px] font-medium text-fg-muted;
+  }
+}
+
+/* Excalidraw fills its container; this ensures pointer events are crisp. */
+.excalidraw-host {
+  height: 100%;
+  width: 100%;
+}
+
+/* Subtle indicator overlay used when Seneca auto-switches tabs. */
+@keyframes tab-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(var(--c-accent) / 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgb(var(--c-accent) / 0);
+  }
+}
+.tab-pulse {
+  animation: tab-pulse 1.4s ease-out 2;
+}

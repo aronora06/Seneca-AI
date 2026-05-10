@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Whitelist post-install build scripts. pnpm 11 requires explicit opt-in
+# (strictDepBuilds is on by default).
+allowBuilds:
+  esbuild: true

@@ -1,0 +1,25 @@
+{
+  "name": "seneca",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Seneca — a voice-driven AI interlocutor with a shared interactive canvas.",
+  "type": "module",
+  "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @seneca/web --filter @seneca/api dev",
+    "dev:web": "pnpm --filter @seneca/web dev",
+    "dev:api": "pnpm --filter @seneca/api dev",
+    "build": "pnpm --filter @seneca/shared build && pnpm --filter @seneca/api build && pnpm --filter @seneca/web build",
+    "build:web": "pnpm --filter @seneca/shared build && pnpm --filter @seneca/web build",
+    "build:api": "pnpm --filter @seneca/shared build && pnpm --filter @seneca/api build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r exec rm -rf dist node_modules .turbo .vite"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
