@@ -198,17 +198,27 @@ Per-section detail; tick when every subcriterion passes.
 
 ## 4. Recommended next steps (prioritised)
 
-Every MVP priority (1a / 1b / 1c / 1d / 2 / 3 / 4) and every closeable tech-debt item (#1, #2, #3, #4, #5, #6, #7, #8, #9, #10) have shipped. The remaining roadmap is small:
+Every MVP priority (1a / 1b / 1c / 1d / 2 / 3 / 4) and every closeable tech-debt item (#1, #2, #3, #4, #5, #6, #7, #8, #9, #10) have shipped. The next planned work is a **pre-production UX polish phase** — six phased slices captured in [`docs/ux_polish_roadmap.md`](ux_polish_roadmap.md). Together they take Seneca from "MVP feature-complete" to "ready for a public pilot."
 
-> **What's left, in order:**
-> 1. **OCR upgrade for scanned PDFs** (tech-debt #11 / vision §11.C) — only when usage data shows scanned-PDF reads are eating the cost budget. Pick Tesseract.js (free, slow) or a cloud OCR provider; route the OCR output into `document_pages.text` so a normal cheap text read takes over.
-> 2. **`document_edit` collaborative editing** (Priority 1d stretch goal) — a real editor UX (Monaco / Notion-style block editor) plus a `document_edit` tool that takes a unified diff and a UI for accept / reject. Separate UX project.
-> 3. **PDF export of AI-authored docs** (vision §11.D) — server-side render via puppeteer or similar. Wait for a real user request.
-> 4. **Mobile-optimised layout** (vision §10 Phase 5) — desktop-first by design; tackle after a few weeks of dogfooding.
-> 5. **ElevenLabs TTS upgrade** (vision §11.4) — only if browser TTS becomes a usability blocker.
-> 6. **Multi-persona switching** (vision §11.5) — explicitly post-MVP.
-> 7. **`tab_switch` explicit tool** — auto-switch already happens whenever a tool fires on a non-active tab; add only if Seneca needs to switch *without* mutating that tab.
-> 8. **Web tab in-iframe link interception / reader-mode** — requires injecting JS into the sandboxed iframe; deferred until a real user friction emerges.
+> **Active roadmap: Pre-prod UX polish** (~11–14 days). Phases in order:
+> - **A — Vision lock & clearer affordance**: three-state segmented control (off / once / locked) replaces the undiscoverable shift-click pin; persisted vision default in user preferences.
+> - **B — Live STT into the input box + VAD**: dictation surface that streams interim + final transcription into the textarea, edits-before-send by default, voice-activity-detection for hands-free, waveform indicator, spacebar push-to-talk.
+> - **C — Premium TTS via ElevenLabs**: streaming HTTP/WebSocket TTS with a curated voice picker in Settings; browser TTS stays as the no-key fallback; speech interruption when the user starts talking.
+> - **D — Session UX**: preview cards with thumbnails + last-message snippets, search/filter, pinning, a `/sessions` page, per-session export, "welcome back" resume hints — the persisted state already exists; this phase makes it discoverable.
+> - **E — Hybrid web tab**: Playwright headless render for JS-heavy SPAs, sanitised proxy stays as the cheap path, Mozilla Readability extract feeds `web_read_page`, per-session render rate limit.
+> - **F — Pre-deploy hardening**: rate limiting, per-user cost cap, structured logging (pino), Sentry, smoke-test CI job, onboarding tour, toast notifications, accessibility pass, privacy/ToS stub pages.
+>
+> See `docs/ux_polish_roadmap.md` for the full plan with file lists, exit criteria, and cross-cutting rules.
+
+After UX polish lands, the original deferred backlog from the seven-phase roadmap stays in place — mostly items that are gated on real usage data:
+
+1. **OCR upgrade for scanned PDFs** (tech-debt #11 / vision §11.C) — pursue when usage data shows scanned-PDF reads eating the cost budget.
+2. **`document_edit` collaborative editing** (Priority 1d stretch) — large UX project (Monaco / block editor + diff UI).
+3. **PDF export of AI-authored docs** (vision §11.D) — wait for a real user request.
+4. **Mobile-optimised layout** (vision §10 Phase 5) — desktop-first by design; tackle after the UX polish phase plus a few weeks of dogfooding.
+5. **Multi-persona switching** (vision §11.5) — explicitly post-MVP.
+6. **`tab_switch` explicit tool** — auto-switch already happens whenever a tool fires on a non-active tab; add only if Seneca needs to switch *without* mutating that tab.
+7. **Long-term cross-session memory** — RAG-over-sessions; revisit when usage shows users returning to the same topic.
 
 Done items below are kept for context — they cover the journey from MVP Phase 1 through Phase 7 cleanup. The order matches the build sequence; each entry names its entry point files so the next agent can navigate the codebase by feature.
 

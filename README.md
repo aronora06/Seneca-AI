@@ -2,7 +2,7 @@
 
 > Seneca is a voice-driven AI interlocutor that shares an interactive canvas with you — a whiteboard you can both draw on, a map you can both pan, a web page you can both read, a document you can both flip through.
 
-The full vision lives in [docs/vision.md](docs/vision.md). The current state, code-review summary, and the prioritised next-steps backlog live in [docs/handoff.md](docs/handoff.md). Setup instructions live in [docs/setup.md](docs/setup.md). The tool / action protocol is documented in [docs/actions.md](docs/actions.md).
+The full vision lives in [docs/vision.md](docs/vision.md). The current state, code-review summary, and the prioritised next-steps backlog live in [docs/handoff.md](docs/handoff.md). The active pre-production polish roadmap lives in [docs/ux_polish_roadmap.md](docs/ux_polish_roadmap.md). Setup instructions live in [docs/setup.md](docs/setup.md). The tool / action protocol is documented in [docs/actions.md](docs/actions.md).
 
 ## What works today
 
