@@ -57,6 +57,19 @@ export class WebProxyError extends Error {
   }
 }
 
+/**
+ * Phase E — exported so the headless renderer can reuse the same
+ * SSRF + scheme guard before opening a page in Chromium. Kept
+ * separate from `fetchAndSanitise` so callers that aren't doing a
+ * fetch (and so can't use the proxy's response shape) can still
+ * trust the URL is safe to follow.
+ */
+export async function assertSafeUrl(rawUrl: string): Promise<URL> {
+  const parsed = parseUrl(rawUrl);
+  await assertHostIsPublic(parsed.hostname);
+  return parsed;
+}
+
 export async function fetchAndSanitise(rawUrl: string): Promise<FetchedPage> {
   const parsed = parseUrl(rawUrl);
   await assertHostIsPublic(parsed.hostname);

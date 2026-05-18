@@ -136,6 +136,35 @@ Without the key, `/api/tts/config` reports `available: false`, the picker stays 
 
 ---
 
+## 2.8 Optional: enable live web rendering (headless Chromium)
+
+Seneca's Web tab ships with a sanitised static engine — fast, cheap, and works without any extra setup. Dynamic / SPA-heavy sites (Twitter, YouTube, anything React-rendered) won't render usefully through it because the server strips every script before delivering the page.
+
+Phase E added a **hybrid resolver**: the server tries the cheap static path first, then automatically falls back to a headless Chromium render when the result looks like a JS shell. The fallback is gated on `playwright-core` being installed.
+
+1. Install Playwright in the API workspace:
+
+   ```bash
+   pnpm --filter @seneca/api add playwright-core
+   ```
+
+2. Download the bundled Chromium binary (~120 MB). Playwright provides a CLI:
+
+   ```bash
+   # Run inside apps/api so the binary lands in the right node_modules.
+   pnpm --filter @seneca/api exec playwright install chromium
+   ```
+
+3. Restart `pnpm dev`. Watch the API logs — on the first request hitting `/api/web/render` you should see Chromium boot once and be cached for subsequent renders. The client's `/api/web/render/config` probe will start reporting `{ headlessAvailable: true }`, the Web tab's footer will flip from "Static engine" to "Live engine" the next time the server falls back, and a small `Live N/30` budget pill appears showing remaining hourly headless renders.
+
+Without `playwright-core` installed, `/api/web/render/config` reports `{ headlessAvailable: false }`, the WebTab silently runs the static engine only, and there's no error or noise — same graceful-fallback pattern Voyage and Tavily already follow.
+
+> Cost guard: headless renders are capped at **30 per session per hour** (`apps/api/src/lib/headlessRateLimit.ts`). When you hit the cap the route returns 429 with a `Retry-After` header; the WebTab keeps the static engine active for the rest of the window. Tweak the budget by passing a second argument to `tryClaimHeadlessRender` if you need a different default.
+
+> Deployment note: on Railway / Fly / Render, deploy with a base image that already ships Chromium (the Playwright official images do) and skip step 2 — the binary is on the image. The cache directory check still runs on first call.
+
+---
+
 ## 3. Real-auth mode (for deploying or testing real login)
 
 ### 3.1 Create a Supabase project
