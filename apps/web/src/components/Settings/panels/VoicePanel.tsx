@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 
 import {
@@ -12,6 +12,23 @@ const INPUT_MODE_OPTIONS: Array<{ value: InputModeDefault; label: string }> = [
   { value: "push-to-talk", label: "Push-to-talk" },
   { value: "continuous",   label: "Continuous" },
   { value: "text-only",    label: "Text only" },
+];
+
+const DICTATION_OPTIONS: Array<{
+  value: "edit" | "hands-free";
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: "edit",
+    label: "Edit before send",
+    hint: "Dictated text streams into the input box so you can review or fix it.",
+  },
+  {
+    value: "hands-free",
+    label: "Hands-free",
+    hint: "Dictated text auto-submits after a short silence (voice activity detection).",
+  },
 ];
 
 export function VoicePanel() {
@@ -151,7 +168,130 @@ export function VoicePanel() {
           })}
         </div>
       </Section>
+
+      <Section
+        label="Dictation behaviour"
+        hint="Pick how finished sentences land when you talk."
+      >
+        <div
+          role="radiogroup"
+          aria-label="Dictation behaviour"
+          className="flex gap-1 rounded-lg border border-border bg-surface-sunk/50 p-1"
+        >
+          {DICTATION_OPTIONS.map((opt) => {
+            const active =
+              opt.value === "edit" ? prefs.editBeforeSend : !prefs.editBeforeSend;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                title={opt.hint}
+                onClick={() =>
+                  update({ editBeforeSend: opt.value === "edit" })
+                }
+                className={clsx(
+                  "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  active ? "bg-card text-fg shadow-sm" : "text-fg-muted hover:text-fg",
+                )}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section
+        label="Voice activity detection"
+        hint="Ignored unless dictation is set to hands-free."
+      >
+        <label
+          className={clsx(
+            "flex cursor-pointer items-center gap-3",
+            prefs.editBeforeSend && "opacity-60",
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={prefs.vadEnabled}
+            disabled={prefs.editBeforeSend}
+            onChange={(e) => update({ vadEnabled: e.target.checked })}
+            className="h-4 w-4 rounded border-border text-accent focus:ring-accent"
+          />
+          <span className="text-sm text-fg-muted">
+            Auto-submit ~1.5s after I stop talking
+          </span>
+        </label>
+      </Section>
+
+      <Section
+        label="Push-to-talk key"
+        hint="Hold this key anywhere in the app to start dictating. Ignored while you're typing in an input."
+      >
+        <PttKeyPicker
+          value={prefs.pttKey}
+          onChange={(next) => update({ pttKey: next })}
+        />
+      </Section>
     </>
+  );
+}
+
+interface PttKeyPickerProps {
+  value: string;
+  onChange: (next: string) => void;
+}
+
+/**
+ * A focusable button that captures the next key the user presses and
+ * stores it as the push-to-talk shortcut. Avoids the rabbit hole of
+ * exposing the full `KeyboardEvent.key` namespace in a select; the
+ * "press to record" interaction is what every IDE / launcher does.
+ */
+function PttKeyPicker({ value, onChange }: PttKeyPickerProps) {
+  const [recording, setRecording] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!recording) return;
+    const handler = (e: KeyboardEvent) => {
+      // Modifier-only keys are never useful as a PTT key — wait for the
+      // user to release them and press something else.
+      if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      onChange(e.key);
+      setRecording(false);
+      ref.current?.blur();
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [recording, onChange]);
+
+  const label =
+    value === " " ? "Space" : value.length === 1 ? value.toUpperCase() : value;
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={() => setRecording((r) => !r)}
+      className={clsx(
+        "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors",
+        recording
+          ? "border-accent bg-accent/10 text-accent"
+          : "border-border bg-surface text-fg hover:bg-surface-sunk",
+      )}
+    >
+      <span className="font-medium">{recording ? "Press a key…" : label}</span>
+      {!recording && (
+        <span className="text-[11px] text-fg-subtle">Click to change</span>
+      )}
+    </button>
   );
 }
 

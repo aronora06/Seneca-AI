@@ -12,6 +12,7 @@ Every MVP slice in vision §7 has shipped, plus the document-intelligence depth 
 
 - **Sign in** with email + password via Supabase, OR run in **dev-bypass mode** with no Supabase project required.
 - **Voice conversation** with Seneca (Web Speech STT + TTS), dockable pane, push-to-talk and continuous-listen modes, mute / pause / skip, always-on text input fallback.
+- **Dictation surface**: STT final results stream into the input box (with the current interim transcript painted as ghost text *inside* the textarea) so you can review and edit before sending. Toggle "Hands-free" for the classic auto-submit path with voice-activity detection that submits ~1.5s after you stop talking. A small waveform indicator sits next to the mic so you can see your voice is being heard, and a global "hold Space to talk" shortcut works anywhere outside an input field (configurable in Settings → Voice & Audio).
 - **System error bubbles** with auto-retry for transient failures and a manual Retry button when a turn fails permanently.
 - **Per-turn + per-session cost pill** in the header showing token counts and dollar totals (Sonnet / Opus / Haiku pricing baked in via `apps/api/src/lib/pricing.ts`).
 

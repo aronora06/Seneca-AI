@@ -46,6 +46,30 @@ export interface UserPreferences {
   ttsAutoPlay: boolean;
   inputModeDefault: InputModeDefault;
   visionDefault: VisionDefault;
+  /**
+   * Phase B — dictation surface.
+   *
+   * When true (default), final STT results stream into the text input
+   * box and the user reviews / edits before pressing Send / Enter.
+   * When false ("hands-free"), final STT results auto-submit just like
+   * today's behaviour. The pane exposes a per-session toggle for the
+   * same setting.
+   */
+  editBeforeSend: boolean;
+  /**
+   * Phase B — voice activity detection for the hands-free path. When
+   * true (default), STT auto-submits ~1.5s after the user stops talking.
+   * Ignored unless `editBeforeSend` is false and continuous listening
+   * is on.
+   */
+  vadEnabled: boolean;
+  /**
+   * Phase B — push-to-talk keyboard shortcut. Hold the key to capture,
+   * release to stop. Disabled while an editable input is focused so the
+   * user can still type. Default is the spacebar (" "). Any single
+   * key value accepted by `KeyboardEvent.key` is valid.
+   */
+  pttKey: string;
   customInstructions: CustomInstructions;
 }
 
@@ -60,6 +84,9 @@ export const DEFAULTS: UserPreferences = {
   ttsAutoPlay: true,
   inputModeDefault: "push-to-talk",
   visionDefault: "off",
+  editBeforeSend: true,
+  vadEnabled: true,
+  pttKey: " ",
   customInstructions: { aboutYou: "", howToRespond: "" },
 };
 
@@ -183,6 +210,16 @@ function merge(raw: Partial<UserPreferences>): UserPreferences {
       raw.visionDefault === "locked"
         ? raw.visionDefault
         : DEFAULTS.visionDefault,
+    editBeforeSend:
+      typeof raw.editBeforeSend === "boolean"
+        ? raw.editBeforeSend
+        : DEFAULTS.editBeforeSend,
+    vadEnabled:
+      typeof raw.vadEnabled === "boolean" ? raw.vadEnabled : DEFAULTS.vadEnabled,
+    pttKey:
+      typeof raw.pttKey === "string" && raw.pttKey.length > 0
+        ? raw.pttKey
+        : DEFAULTS.pttKey,
     customInstructions: {
       aboutYou:
         typeof raw.customInstructions?.aboutYou === "string"

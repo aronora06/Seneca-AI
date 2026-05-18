@@ -49,3 +49,39 @@ describe("userPreferences — visionDefault", () => {
     expect(next.accentId).toBe("ember");
   });
 });
+
+describe("userPreferences — Phase B voice fields", () => {
+  it("defaults editBeforeSend to true, vadEnabled to true, pttKey to Space", () => {
+    const p = readPrefs();
+    expect(p.editBeforeSend).toBe(true);
+    expect(p.vadEnabled).toBe(true);
+    expect(p.pttKey).toBe(" ");
+  });
+
+  it("round-trips boolean editBeforeSend and vadEnabled, and string pttKey", () => {
+    writePrefs({ editBeforeSend: false, vadEnabled: false, pttKey: "Tab" });
+    const p = readPrefs();
+    expect(p.editBeforeSend).toBe(false);
+    expect(p.vadEnabled).toBe(false);
+    expect(p.pttKey).toBe("Tab");
+  });
+
+  it("rejects non-boolean editBeforeSend and non-string pttKey on read", () => {
+    try {
+      localStorage.setItem(
+        "seneca:prefs",
+        JSON.stringify({
+          editBeforeSend: "yes",
+          vadEnabled: 1,
+          pttKey: "",
+        }),
+      );
+    } catch {
+      // ignore
+    }
+    const p = readPrefs();
+    expect(p.editBeforeSend).toBe(true);
+    expect(p.vadEnabled).toBe(true);
+    expect(p.pttKey).toBe(" ");
+  });
+});
