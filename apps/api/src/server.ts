@@ -16,6 +16,7 @@ import { chatRouter } from "./routes/chat.js";
 import { documentsRouter } from "./routes/documents.js";
 import { healthRouter } from "./routes/health.js";
 import { sessionsRouter } from "./routes/sessions.js";
+import { ttsRouter } from "./routes/tts.js";
 import { webRouter } from "./routes/web.js";
 
 const app = express();
@@ -36,6 +37,7 @@ app.use(chatRouter);
 app.use(sessionsRouter);
 app.use(webRouter);
 app.use(documentsRouter);
+app.use(ttsRouter);
 
 // Default error handler — keeps responses uniform.
 app.use(

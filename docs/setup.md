@@ -106,6 +106,34 @@ Test it: upload a multi-page paper and ask Seneca *"Where does the author discus
 >
 > Real-auth mode: chunks live in a `pgvector`-backed Postgres table with an `ivfflat` index; see §3.1 step 6.5 below for the migration. Skip the table creation if `VOYAGE_API_KEY` is empty — search degrades gracefully to substring without it.
 
+## 2.7 Optional: enable premium voice (ElevenLabs)
+
+Browser-native `SpeechSynthesisUtterance` works out of the box and is fine for most users — but quality varies wildly across operating systems (on Linux and many Chromebooks it's barely usable). Adding an ElevenLabs key flips Seneca onto streaming neural voices with sub-second time-to-first-byte.
+
+1. Go to https://elevenlabs.io/ and sign up. The **Free** tier gives you 10,000 characters per month (≈ 8 minutes of audio) — enough for casual dev. The **Starter** plan is $5/mo for ~30,000 characters.
+2. In your ElevenLabs dashboard, open **Profile → API key** and copy the value.
+3. Put it in `apps/api/.env`:
+
+   ```bash
+   ELEVENLABS_API_KEY=sk_...
+   # Optional: pick a default voice from https://elevenlabs.io/app/voice-library.
+   # Leave empty to use the curated set bundled with Seneca; the user can
+   # pick a voice from Settings → Voice & Audio on first run.
+   # ELEVENLABS_DEFAULT_VOICE_ID=
+   # Optional: stick with eleven_turbo_v2_5 unless you understand the
+   # latency/quality trade-off — it's the only model that streams in
+   # ~300ms TTFB at decent quality.
+   # ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
+   ```
+
+4. Restart `pnpm dev`. On the next boot the API logs the route list including `/api/tts`; the web client probes `/api/tts/config` once on mount and switches to the premium engine automatically.
+
+Test it: open Settings → Voice & Audio. You should see a new "Voice engine" toggle defaulting to **Premium (auto)** and a "Premium voice" picker with six curated voices. Click "Preview" on any voice to hear ~3 seconds of sample audio. The voice pane now shows a small **Premium** badge during playback.
+
+Without the key, `/api/tts/config` reports `available: false`, the picker stays hidden, and the existing browser-TTS path keeps working — same graceful-fallback pattern Voyage and Tavily already follow.
+
+> Cost telemetry: ElevenLabs bills per character. The web client tracks usage in the session's `usage.ttsCharacters` and `usage.ttsCostUSD` fields and the cost pill tooltip shows the running TTS spend alongside Anthropic.
+
 ---
 
 ## 3. Real-auth mode (for deploying or testing real login)

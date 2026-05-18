@@ -204,6 +204,13 @@ interface SenecaState {
   applyUsageEvent: (event: UsageStreamEvent) => void;
   setSessionUsage: (usage: SessionUsage) => void;
   resetUsage: () => void;
+
+  /**
+   * Phase C — debit TTS character usage. `costUSD` is the running
+   * provider cost (already computed at the call site so the store
+   * stays free of pricing concerns).
+   */
+  bumpTtsUsage: (characters: number, costUSD: number) => void;
 }
 
 const DOCK_STORAGE_KEY = "seneca:dockSide";
@@ -466,4 +473,14 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
       sessionUsage: { ...DEFAULT_SESSION_USAGE },
       lastTurnUsage: null,
     }),
+
+  bumpTtsUsage: (characters, costUSD) =>
+    set((s) => ({
+      sessionUsage: {
+        ...s.sessionUsage,
+        ttsCharacters: (s.sessionUsage.ttsCharacters ?? 0) + characters,
+        ttsCostUSD: (s.sessionUsage.ttsCostUSD ?? 0) + costUSD,
+        updatedAt: new Date().toISOString(),
+      },
+    })),
 }));

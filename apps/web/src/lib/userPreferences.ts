@@ -40,7 +40,20 @@ export interface UserPreferences {
   accentId: string;
   fontSize: FontSize;
   backgroundStyle: BackgroundStyle;
+  /** Browser-TTS voice URI (legacy fallback path). */
   ttsVoiceURI: string | null;
+  /**
+   * Phase C — ElevenLabs voice id. Null means "use the server's
+   * default". Distinct from `ttsVoiceURI` because ElevenLabs IDs are
+   * 22-char opaque tokens, not URIs.
+   */
+  ttsVoiceId: string | null;
+  /**
+   * Phase C — premium TTS provider preference. "auto" picks ElevenLabs
+   * when available and falls back to the browser engine; "browser"
+   * forces the browser engine even when ElevenLabs is configured.
+   */
+  ttsProvider: "auto" | "browser";
   ttsRate: number;
   ttsPitch: number;
   ttsAutoPlay: boolean;
@@ -79,6 +92,8 @@ export const DEFAULTS: UserPreferences = {
   fontSize: "md",
   backgroundStyle: "gradient",
   ttsVoiceURI: null,
+  ttsVoiceId: null,
+  ttsProvider: "auto",
   ttsRate: 1.0,
   ttsPitch: 1.0,
   ttsAutoPlay: true,
@@ -188,6 +203,14 @@ function merge(raw: Partial<UserPreferences>): UserPreferences {
         : DEFAULTS.backgroundStyle,
     ttsVoiceURI:
       typeof raw.ttsVoiceURI === "string" ? raw.ttsVoiceURI : DEFAULTS.ttsVoiceURI,
+    ttsVoiceId:
+      typeof raw.ttsVoiceId === "string" && raw.ttsVoiceId.length > 0
+        ? raw.ttsVoiceId
+        : DEFAULTS.ttsVoiceId,
+    ttsProvider:
+      raw.ttsProvider === "auto" || raw.ttsProvider === "browser"
+        ? raw.ttsProvider
+        : DEFAULTS.ttsProvider,
     ttsRate:
       typeof raw.ttsRate === "number" && raw.ttsRate >= 0.5 && raw.ttsRate <= 2
         ? raw.ttsRate

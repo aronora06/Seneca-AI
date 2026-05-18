@@ -17,12 +17,16 @@ export function CostPill() {
 
   // Don't render until something's been spent — avoids a stale "$0.00"
   // pill on a fresh boot.
+  const ttsChars = sessionUsage.ttsCharacters ?? 0;
+  const ttsCost = sessionUsage.ttsCostUSD ?? 0;
   const hasSpent =
-    sessionUsage.inputCostUSD > 0 || sessionUsage.outputCostUSD > 0;
+    sessionUsage.inputCostUSD > 0 ||
+    sessionUsage.outputCostUSD > 0 ||
+    ttsCost > 0;
   if (!hasSpent && !lastTurnUsage) return null;
 
   const sessionTotal =
-    sessionUsage.inputCostUSD + sessionUsage.outputCostUSD;
+    sessionUsage.inputCostUSD + sessionUsage.outputCostUSD + ttsCost;
 
   const turnIn = lastTurnUsage?.inputTokens ?? 0;
   const turnOut = lastTurnUsage?.outputTokens ?? 0;
@@ -33,6 +37,12 @@ export function CostPill() {
   const tooltip = [
     `Last turn: ${turnIn.toLocaleString()} in / ${turnOut.toLocaleString()} out`,
     `Last turn cost: ${formatUSD(turnTotal)}`,
+    `Session model cost: ${formatUSD(
+      sessionUsage.inputCostUSD + sessionUsage.outputCostUSD,
+    )}`,
+    ttsChars > 0
+      ? `TTS: ${ttsChars.toLocaleString()} chars · ${formatUSD(ttsCost)} (ElevenLabs)`
+      : null,
     `Session total: ${formatUSD(sessionTotal)}`,
     lastTurnUsage ? `Model: ${lastTurnUsage.model}` : null,
   ]

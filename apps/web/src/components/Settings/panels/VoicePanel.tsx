@@ -6,7 +6,14 @@ import {
   writePrefs,
   type InputModeDefault,
 } from "../../../lib/userPreferences";
+import { fetchTtsConfig, type CuratedVoice } from "../../../hooks/useSpeech";
+import { devBearer, devBypassAuth } from "../../../lib/devBypass";
+import { supabase } from "../../../lib/supabase";
 import { PanelIntro, Section } from "./_shared";
+
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ??
+  "http://localhost:8787";
 
 const INPUT_MODE_OPTIONS: Array<{ value: InputModeDefault; label: string }> = [
   { value: "push-to-talk", label: "Push-to-talk" },
@@ -31,9 +38,22 @@ const DICTATION_OPTIONS: Array<{
   },
 ];
 
+const SAMPLE_TEXT = "Let us begin. What shall we think about today?";
+
 export function VoicePanel() {
   const [prefs, setPrefs] = useState(() => readPrefs());
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [premium, setPremium] = useState<{
+    available: boolean;
+    voices: CuratedVoice[];
+    defaultVoiceId: string | null;
+  } | null>(null);
+  const [previewState, setPreviewState] = useState<{
+    voiceId: string | null;
+    error: string | null;
+  }>({ voiceId: null, error: null });
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewBlobUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -42,6 +62,32 @@ export function VoicePanel() {
     window.speechSynthesis.addEventListener("voiceschanged", update);
     return () =>
       window.speechSynthesis.removeEventListener("voiceschanged", update);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchTtsConfig().then((info) => {
+      if (cancelled) return;
+      setPremium({
+        available: info.available,
+        voices: info.voices,
+        defaultVoiceId: info.defaultVoiceId,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (previewBlobUrlRef.current) {
+        URL.revokeObjectURL(previewBlobUrlRef.current);
+        previewBlobUrlRef.current = null;
+      }
+      previewAudioRef.current?.pause();
+      previewAudioRef.current = null;
+    };
   }, []);
 
   const update = useCallback(
@@ -54,9 +100,7 @@ export function VoicePanel() {
   const previewVoice = useCallback(() => {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(
-      "Let us begin. What shall we think about today?",
-    );
+    const utter = new SpeechSynthesisUtterance(SAMPLE_TEXT);
     if (prefs.ttsVoiceURI) {
       const match = voices.find((v) => v.voiceURI === prefs.ttsVoiceURI);
       if (match) utter.voice = match;
@@ -66,7 +110,65 @@ export function VoicePanel() {
     window.speechSynthesis.speak(utter);
   }, [prefs.ttsVoiceURI, prefs.ttsRate, prefs.ttsPitch, voices]);
 
+  const previewPremiumVoice = useCallback(
+    async (voiceId: string) => {
+      // Stop any previous preview so back-to-back clicks feel snappy.
+      previewAudioRef.current?.pause();
+      previewAudioRef.current = null;
+      if (previewBlobUrlRef.current) {
+        URL.revokeObjectURL(previewBlobUrlRef.current);
+        previewBlobUrlRef.current = null;
+      }
+      setPreviewState({ voiceId, error: null });
+      try {
+        const token = devBypassAuth
+          ? devBearer
+          : (await supabase.auth.getSession()).data.session?.access_token;
+        if (!token) throw new Error("Not authenticated");
+        const res = await fetch(`${API_BASE}/api/tts`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text: SAMPLE_TEXT, voiceId }),
+        });
+        if (!res.ok) {
+          const j = (await res.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(j?.error ?? `Preview failed (${res.status})`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        previewBlobUrlRef.current = url;
+        const audio = new Audio(url);
+        previewAudioRef.current = audio;
+        audio.addEventListener(
+          "ended",
+          () => {
+            setPreviewState((cur) =>
+              cur.voiceId === voiceId ? { voiceId: null, error: null } : cur,
+            );
+            URL.revokeObjectURL(url);
+            if (previewBlobUrlRef.current === url) {
+              previewBlobUrlRef.current = null;
+            }
+          },
+          { once: true },
+        );
+        await audio.play();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setPreviewState({ voiceId: null, error: msg });
+      }
+    },
+    [],
+  );
+
   const groupedVoices = groupByLang(voices);
+  const showPremiumPicker =
+    premium?.available && prefs.ttsProvider !== "browser";
 
   return (
     <>
@@ -75,7 +177,103 @@ export function VoicePanel() {
         autoSaves
       />
 
-      <Section label="Voice">
+      {premium?.available && (
+        <Section
+          label="Voice engine"
+          hint="Premium uses ElevenLabs. Browser uses whatever your OS provides."
+        >
+          <div
+            role="radiogroup"
+            aria-label="Voice engine"
+            className="flex gap-1 rounded-lg border border-border bg-surface-sunk/50 p-1"
+          >
+            {(
+              [
+                { v: "auto" as const, label: "Premium (auto)" },
+                { v: "browser" as const, label: "Browser only" },
+              ]
+            ).map((o) => {
+              const active = prefs.ttsProvider === o.v;
+              return (
+                <button
+                  key={o.v}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => update({ ttsProvider: o.v })}
+                  className={clsx(
+                    "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                    active
+                      ? "bg-card text-fg shadow-sm"
+                      : "text-fg-muted hover:text-fg",
+                  )}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
+      {showPremiumPicker && (
+        <Section
+          label="Premium voice"
+          hint="ElevenLabs streams audio in ~300ms; the active voice is highlighted."
+        >
+          <ul className="space-y-1">
+            {(premium?.voices ?? []).map((voice) => {
+              const selected =
+                (prefs.ttsVoiceId ?? premium?.defaultVoiceId) === voice.id;
+              const playing = previewState.voiceId === voice.id;
+              return (
+                <li key={voice.id}>
+                  <div
+                    className={clsx(
+                      "flex items-center gap-3 rounded-md border px-3 py-2 transition-colors",
+                      selected
+                        ? "border-accent/60 bg-accent/5"
+                        : "border-border bg-surface hover:bg-surface-sunk",
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => update({ ttsVoiceId: voice.id })}
+                      className="flex-1 text-left"
+                    >
+                      <div className="text-sm font-medium text-fg">
+                        {voice.name}
+                        {selected && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wide text-accent">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-fg-subtle">
+                        {voice.description}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void previewPremiumVoice(voice.id)}
+                      disabled={playing}
+                      className="btn-ghost h-7 px-2 text-xs"
+                      title={playing ? "Playing preview…" : "Preview this voice"}
+                    >
+                      {playing ? "Playing…" : "Preview"}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {previewState.error && (
+            <p className="mt-2 text-xs text-danger-fg">{previewState.error}</p>
+          )}
+        </Section>
+      )}
+
+      <Section label={showPremiumPicker ? "Fallback voice" : "Voice"}>
         <div className="flex gap-2">
           <select
             value={prefs.ttsVoiceURI ?? ""}

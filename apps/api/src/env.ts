@@ -63,6 +63,22 @@ export const env = {
   voyageApiKey: optional("VOYAGE_API_KEY", ""),
   voyageModel: optional("VOYAGE_MODEL", "voyage-3-large"),
 
+  /**
+   * Optional. When set, `POST /api/tts` streams synthesised audio from
+   * ElevenLabs. When empty, the route returns a 503 with a friendly
+   * "configure ElevenLabs" payload and the web client silently falls
+   * back to the browser's `SpeechSynthesisUtterance` — same graceful
+   * pattern Voyage and Tavily already follow.
+   *
+   * Free tier (10k chars / month) is enough for casual dev. We pin
+   * `eleven_turbo_v2_5` because it's the only model that streams
+   * sub-second-latency audio at usable quality; override only if you
+   * understand the trade-off.
+   */
+  elevenLabsApiKey: optional("ELEVENLABS_API_KEY", ""),
+  elevenLabsDefaultVoiceId: optional("ELEVENLABS_DEFAULT_VOICE_ID", ""),
+  elevenLabsModelId: optional("ELEVENLABS_MODEL_ID", "eleven_turbo_v2_5"),
+
   supabaseUrl: devBypassAuth
     ? optional("SUPABASE_URL", "")
     : required("SUPABASE_URL"),

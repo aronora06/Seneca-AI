@@ -137,6 +137,18 @@ export interface SessionUsage {
   cacheCreationInputTokens: number;
   inputCostUSD: number;
   outputCostUSD: number;
+  /**
+   * Phase C — characters synthesised through the premium TTS provider
+   * (ElevenLabs). Absent on rows that pre-date Phase C; treat
+   * `undefined` as `0`.
+   */
+  ttsCharacters?: number;
+  /**
+   * Phase C — running ElevenLabs cost in USD, computed client-side
+   * using the pricing in `@seneca/shared` so the dashboard agrees with
+   * the provider to within a fraction of a cent.
+   */
+  ttsCostUSD?: number;
   /** When we last received a usage event. ISO timestamp. */
   updatedAt: string;
 }
@@ -148,8 +160,20 @@ export const DEFAULT_SESSION_USAGE: SessionUsage = {
   cacheCreationInputTokens: 0,
   inputCostUSD: 0,
   outputCostUSD: 0,
+  ttsCharacters: 0,
+  ttsCostUSD: 0,
   updatedAt: new Date(0).toISOString(),
 };
+
+/**
+ * Phase C — ElevenLabs character pricing. Hard-coded constant so the
+ * client doesn't need a round-trip per turn. Update if ElevenLabs
+ * changes their per-character rate.
+ *
+ * Reference: https://elevenlabs.io/pricing — Creator/Pro plans bill at
+ * ~$0.18 / 1k characters for the multilingual streaming models.
+ */
+export const ELEVENLABS_USD_PER_CHAR = 0.00018;
 
 /** Request body for /api/chat and /api/vision. */
 export interface ChatRequest {

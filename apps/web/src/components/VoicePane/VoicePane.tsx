@@ -7,9 +7,11 @@ import {
 } from "react";
 import clsx from "clsx";
 
+import { ELEVENLABS_USD_PER_CHAR } from "@seneca/shared";
+
 import { useSenecaStore } from "../../store/seneca";
 import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
-import { useSpeechSynthesis } from "../../hooks/useSpeechSynthesis";
+import { useSpeech } from "../../hooks/useSpeech";
 import { runTurn } from "../../lib/runTurn";
 import { usePrefs, writePrefs } from "../../lib/userPreferences";
 
@@ -50,8 +52,13 @@ export function VoicePane() {
   const editBeforeSend = prefs.editBeforeSend;
   const vadEnabled = prefs.vadEnabled;
   const pttKey = prefs.pttKey || " ";
+  const bumpTtsUsage = useSenecaStore((s) => s.bumpTtsUsage);
 
-  const tts = useSpeechSynthesis();
+  const tts = useSpeech({
+    onUsage: (chars) => {
+      bumpTtsUsage(chars, chars * ELEVENLABS_USD_PER_CHAR);
+    },
+  });
   const [text, setText] = useState("");
   const [interim, setInterim] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -141,6 +148,23 @@ export function VoicePane() {
     else if (tts.speaking) setVoiceMode("speaking");
     else setVoiceMode("idle");
   }, [stt.isListening, tts.speaking, setVoiceMode]);
+
+  // Speech interruption — when the user starts talking while Seneca is
+  // mid-sentence, pause TTS so the back-and-forth feels natural. We
+  // resume on stt.stop unless the user actually submitted (in which
+  // case clear() will run as part of submitText). The pause is light:
+  // we only resume if no further user-input action has cleared the
+  // queue.
+  const wasPausedForListeningRef = useRef(false);
+  useEffect(() => {
+    if (stt.isListening && tts.speaking && !tts.paused) {
+      tts.pause();
+      wasPausedForListeningRef.current = true;
+    } else if (!stt.isListening && wasPausedForListeningRef.current) {
+      wasPausedForListeningRef.current = false;
+      if (tts.paused) tts.resume();
+    }
+  }, [stt.isListening, tts]);
 
   useEffect(() => {
     if (!stt.supported) return;
@@ -288,6 +312,7 @@ export function VoicePane() {
               speaking={tts.speaking}
               paused={tts.paused}
               muted={tts.muted}
+              engine={tts.engine}
               setMuted={tts.setMuted}
               pause={tts.pause}
               resume={tts.resume}
@@ -496,6 +521,7 @@ function SpeechControls(props: {
   speaking: boolean;
   paused: boolean;
   muted: boolean;
+  engine: "elevenlabs" | "browser";
   setMuted: (m: boolean) => void;
   pause: () => void;
   resume: () => void;
@@ -509,7 +535,13 @@ function SpeechControls(props: {
         type="button"
         className="btn-ghost h-7 px-2"
         onClick={() => props.setMuted(!props.muted)}
-        title={props.muted ? "Unmute Seneca's voice" : "Mute Seneca's voice"}
+        title={
+          props.muted
+            ? "Unmute Seneca's voice"
+            : props.engine === "elevenlabs"
+              ? "Mute Seneca's voice (ElevenLabs premium)"
+              : "Mute Seneca's voice (browser TTS)"
+        }
       >
         {props.muted ? "🔇 Muted" : "🔊"}
       </button>
@@ -529,6 +561,14 @@ function SpeechControls(props: {
       >
         ⏭ Skip
       </button>
+      {props.engine === "elevenlabs" && (
+        <span
+          className="rounded-full bg-accent/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-accent"
+          title="Premium TTS via ElevenLabs"
+        >
+          Premium
+        </span>
+      )}
       {props.showShortcutHint && (
         <span className="ml-auto truncate text-[10px] text-fg-subtle">
           Hold {prettyKey(props.pttKey)} to talk

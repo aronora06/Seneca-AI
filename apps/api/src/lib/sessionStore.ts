@@ -137,6 +137,10 @@ export interface SessionStore {
       cacheCreationInputTokens: number;
       inputCostUSD: number;
       outputCostUSD: number;
+      /** Phase C — characters synthesised through ElevenLabs. */
+      ttsCharacters?: number;
+      /** Phase C — running ElevenLabs cost in USD. */
+      ttsCostUSD?: number;
     },
   ): Promise<void>;
 }
@@ -287,6 +291,8 @@ const memoryStore: SessionStore = {
         current.cacheCreationInputTokens + delta.cacheCreationInputTokens,
       inputCostUSD: current.inputCostUSD + delta.inputCostUSD,
       outputCostUSD: current.outputCostUSD + delta.outputCostUSD,
+      ttsCharacters: (current.ttsCharacters ?? 0) + (delta.ttsCharacters ?? 0),
+      ttsCostUSD: (current.ttsCostUSD ?? 0) + (delta.ttsCostUSD ?? 0),
       updatedAt: nowIso(),
     };
     row.updated_at = nowIso();
@@ -483,6 +489,8 @@ const supabaseStore: SessionStore = {
         current.cacheCreationInputTokens + delta.cacheCreationInputTokens,
       inputCostUSD: current.inputCostUSD + delta.inputCostUSD,
       outputCostUSD: current.outputCostUSD + delta.outputCostUSD,
+      ttsCharacters: (current.ttsCharacters ?? 0) + (delta.ttsCharacters ?? 0),
+      ttsCostUSD: (current.ttsCostUSD ?? 0) + (delta.ttsCostUSD ?? 0),
       updatedAt: nowIso(),
     };
     const { error: writeErr } = await client

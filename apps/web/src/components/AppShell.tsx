@@ -191,6 +191,8 @@ function normalizeUsage(raw: unknown): SessionUsage {
     cacheCreationInputTokens: numOr(u.cacheCreationInputTokens, 0),
     inputCostUSD: numOr(u.inputCostUSD, 0),
     outputCostUSD: numOr(u.outputCostUSD, 0),
+    ttsCharacters: numOr(u.ttsCharacters, 0),
+    ttsCostUSD: numOr(u.ttsCostUSD, 0),
     updatedAt:
       typeof u.updatedAt === "string"
         ? u.updatedAt
