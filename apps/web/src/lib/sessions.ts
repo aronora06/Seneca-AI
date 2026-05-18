@@ -8,12 +8,29 @@
 import type { SessionRecord } from "@seneca/shared";
 import { apiJson } from "./api";
 
-/** Light summary the list endpoint returns — full row is paged in on switch. */
+/** Canvas-tab markers shown as icons on a session card. */
+export type SessionTabFlag = "documents" | "web" | "map" | "whiteboard";
+
+/**
+ * Summary returned by the list endpoint — full row is paged in on
+ * switch. Phase D added the preview fields so the modal can render
+ * cards (snippet, doc count, tab icons) without a second round-trip.
+ */
 export interface SessionSummary {
   id: string;
   name: string;
   created_at: string;
   updated_at: string;
+  /** True when the user has starred the session. */
+  pinned?: boolean;
+  /** ISO timestamp of the last transcript entry, or null when empty. */
+  lastMessageAt?: string | null;
+  /** First ~140 chars of the most recent user-authored line. */
+  lastUserText?: string | null;
+  /** Count of documents currently attached to the session. */
+  documentCount?: number;
+  /** Which canvas tabs were touched in this session. */
+  tabs?: SessionTabFlag[];
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {
@@ -32,6 +49,21 @@ export async function renameSession(id: string, name: string): Promise<void> {
   await apiJson<void>(`/api/sessions/${id}`, {
     method: "PATCH",
     body: { name },
+  });
+}
+
+/**
+ * Phase D — star / unstar a session. Returns void; the modal does an
+ * optimistic local flip and re-lists on success to pick up the new
+ * pinned-first sort.
+ */
+export async function setSessionPinned(
+  id: string,
+  pinned: boolean,
+): Promise<void> {
+  await apiJson<void>(`/api/sessions/${id}`, {
+    method: "PATCH",
+    body: { pinned },
   });
 }
 

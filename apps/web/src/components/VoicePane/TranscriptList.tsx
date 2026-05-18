@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { useSenecaStore } from "../../store/seneca";
 import { retryLastTurn } from "../../lib/runTurn";
 import { useSpeechSynthesis } from "../../hooks/useSpeechSynthesis";
+import { ResumeBanner } from "./ResumeBanner";
 import { ToolChips } from "./ToolChips";
 import { SystemBubble } from "./SystemBubble";
 
@@ -30,6 +31,7 @@ export function TranscriptList() {
       className="flex-1 space-y-3 overflow-y-auto px-4 py-3"
       aria-live="polite"
     >
+      <ResumeBanner />
       {transcript.length === 0 && !partial && !interim && (
         <p className="mt-8 text-center font-serif text-base italic text-fg-subtle">
           Speak, or type below. Seneca is here.

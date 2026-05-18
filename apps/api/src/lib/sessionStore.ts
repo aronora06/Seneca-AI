@@ -34,13 +34,41 @@ import { supabaseForUser } from "./supabase.js";
 /**
  * Compact summary used by the SessionsModal — keeps the list query cheap
  * by avoiding the multi-MB transcript / whiteboard / documents JSONB
- * columns. We stay shape-compatible with `SessionRecord` so the modal can
- * read the same fields it would from a full row.
+ * columns we don't need to render a card. Phase D adds a handful of
+ * derived previews (`lastMessageAt`, `lastUserText`, `documentCount`,
+ * `tabs`) so the cards in the modal can show *what's in* each session
+ * without a second round-trip per row.
  */
-export type SessionSummary = Pick<
-  SessionRecord,
-  "id" | "name" | "created_at" | "updated_at"
->;
+export interface SessionSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  /** Phase D — pinned sessions sort to the top. */
+  pinned?: boolean;
+  /** ISO timestamp of the last transcript entry, or null when empty. */
+  lastMessageAt?: string | null;
+  /**
+   * First ~140 chars of the most recent *user* message, used as the
+   * snippet on the card. We deliberately prefer the user side: it
+   * tells the human what they were *asking about*, which is the way
+   * they remember a session.
+   */
+  lastUserText?: string | null;
+  /** Count of documents currently attached to the session. */
+  documentCount?: number;
+  /**
+   * Which canvas tabs were touched in this session. Today derived
+   * from documents (any items → `documents`), the persisted web URL
+   * (`web`), persisted map state (`map`), and whiteboard scene
+   * (`whiteboard`). The modal renders small icons for these so the
+   * user can spot at a glance which session was the one with the map.
+   */
+  tabs?: SessionTabFlag[];
+}
+
+/** Canvas-tab markers shown as icons on a session card. */
+export type SessionTabFlag = "documents" | "web" | "map" | "whiteboard";
 
 export interface SessionStore {
   /** Get the user's current session, creating one if it doesn't exist. */
@@ -143,6 +171,78 @@ export interface SessionStore {
       ttsCostUSD?: number;
     },
   ): Promise<void>;
+  /**
+   * Phase D — star / unstar a session. Pinned sessions sort to the top
+   * of the sessions list / modal. Best-effort against the `pinned`
+   * column; tolerates older deployments that haven't run the
+   * migration (silently no-ops, mirroring the `usage` pattern).
+   */
+  setPinned(
+    sessionId: string,
+    userId: string,
+    pinned: boolean,
+    jwt?: string,
+  ): Promise<void>;
+}
+
+// ── summary helper ──────────────────────────────────────────────────────────
+
+/**
+ * Derive the cheap-to-render fields the SessionsModal needs (last user
+ * message snippet, document count, which tabs were used) from a full
+ * session row. Centralised here so the memory store and the supabase
+ * store render the same shape.
+ */
+export function summarizeSession(row: SessionRecord): SessionSummary {
+  const transcript = Array.isArray(row.transcript) ? row.transcript : [];
+  const lastMessage =
+    transcript.length > 0 ? transcript[transcript.length - 1] : null;
+  // Walk backwards for the most recent user-authored line — that's what
+  // a returning user actually remembers ("I was asking about X").
+  let lastUser: TranscriptMessage | null = null;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const m = transcript[i];
+    if (m && m.role === "user" && typeof m.text === "string" && m.text.trim()) {
+      lastUser = m;
+      break;
+    }
+  }
+  const docs = Array.isArray(row.documents?.items) ? row.documents!.items : [];
+  const tabs: SessionTabFlag[] = [];
+  if (docs.length > 0) tabs.push("documents");
+  if (row.web?.url) tabs.push("web");
+  if (
+    (Array.isArray(row.map?.pins) && row.map!.pins.length > 0) ||
+    (Array.isArray(row.map?.shapes) && row.map!.shapes.length > 0)
+  ) {
+    tabs.push("map");
+  }
+  if (
+    Array.isArray(row.whiteboard?.elements) &&
+    row.whiteboard!.elements.length > 0
+  ) {
+    tabs.push("whiteboard");
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    pinned: row.pinned === true,
+    lastMessageAt: lastMessage?.ts ?? null,
+    lastUserText: lastUser ? truncateSnippet(lastUser.text) : null,
+    documentCount: docs.length,
+    tabs,
+  };
+}
+
+/** Truncate to ~140 chars on a word boundary so cards don't wrap forever. */
+function truncateSnippet(raw: string): string {
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= 140) return collapsed;
+  const cut = collapsed.slice(0, 140);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 80 ? cut.slice(0, lastSpace) : cut) + "…";
 }
 
 // ── in-memory implementation ────────────────────────────────────────────────
@@ -188,14 +288,17 @@ const memoryStore: SessionStore = {
     const out: SessionSummary[] = [];
     for (const row of memorySessions.values()) {
       if (row.user_id !== userId) continue;
-      out.push({
-        id: row.id,
-        name: row.name,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-      });
+      out.push(summarizeSession(row));
     }
-    out.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+    // Pinned first, then most-recently-active. The modal applies the
+    // same sort on the client so any future server changes stay
+    // consistent without a client redeploy.
+    out.sort((a, b) => {
+      if ((a.pinned === true) !== (b.pinned === true)) {
+        return a.pinned === true ? -1 : 1;
+      }
+      return a.updated_at < b.updated_at ? 1 : -1;
+    });
     return out;
   },
 
@@ -278,6 +381,14 @@ const memoryStore: SessionStore = {
     row.updated_at = nowIso();
   },
 
+  async setPinned(sessionId, userId, pinned) {
+    const row = memorySessions.get(sessionId);
+    if (!row || row.user_id !== userId) return;
+    row.pinned = pinned;
+    // Toggling pinned doesn't bump updated_at — pinning isn't "activity",
+    // and we don't want a star click to reshuffle the time-ordered list.
+  },
+
   async bumpUsage(sessionId, userId, _jwt, delta) {
     const row = memorySessions.get(sessionId);
     if (!row || row.user_id !== userId) return;
@@ -336,12 +447,42 @@ const supabaseStore: SessionStore = {
 
   async list(_userId, jwt) {
     const client = supabaseForUser(requireJwt(jwt));
+    // We pull the JSONB columns the summary needs (transcript,
+    // documents, web, map, whiteboard) so the cards in the modal can
+    // show a real preview. Slightly bigger payload than the bare
+    // metadata SELECT we used through Phase C, but the alternative
+    // would be denormalising last_user_text / document_count into
+    // their own columns and updating them on every write — too much
+    // churn for the Phase D appetite. Postgres will short-circuit
+    // empty JSONB columns in well under a millisecond per row, and
+    // typical users have <100 sessions.
     const { data, error } = await client
       .from("sessions")
-      .select("id, name, created_at, updated_at")
+      .select(
+        "id, name, created_at, updated_at, pinned, transcript, documents, web, map, whiteboard",
+      )
       .order("updated_at", { ascending: false });
-    if (error) throw new Error(error.message);
-    return (data ?? []) as SessionSummary[];
+    if (error) {
+      // Older deployments without the `pinned` column return "column
+      // does not exist". Fall back to the legacy projection so the
+      // modal keeps working pre-migration.
+      if (/column .* does not exist/i.test(error.message)) {
+        const fallback = await client
+          .from("sessions")
+          .select(
+            "id, name, created_at, updated_at, transcript, documents, web, map, whiteboard",
+          )
+          .order("updated_at", { ascending: false });
+        if (fallback.error) throw new Error(fallback.error.message);
+        return (fallback.data ?? []).map((r) =>
+          summarizeSession(withDefaults(r as SessionRecord)),
+        );
+      }
+      throw new Error(error.message);
+    }
+    return (data ?? []).map((r) =>
+      summarizeSession(withDefaults(r as SessionRecord)),
+    );
   },
 
   async create(_userId, name, jwt) {
@@ -458,6 +599,23 @@ const supabaseStore: SessionStore = {
     if (error) throw new Error(error.message);
   },
 
+  async setPinned(sessionId, _userId, pinned, jwt) {
+    const client = supabaseForUser(requireJwt(jwt));
+    const { error } = await client
+      .from("sessions")
+      .update({ pinned })
+      .eq("id", sessionId);
+    if (error) {
+      // Pre-migration deployments don't have the column yet — treat
+      // the pin as a no-op and let the UI flip its local optimistic
+      // state. The next list() call will surface the un-pinned state
+      // and we'll be honest about it.
+      if (!/column .* does not exist/i.test(error.message)) {
+        throw new Error(error.message);
+      }
+    }
+  },
+
   async bumpUsage(sessionId, _userId, jwt, delta) {
     // Read-modify-write is technically racy if two turns finish at the
     // exact same millisecond on the same session, but the cost pill
@@ -519,6 +677,9 @@ function withDefaults(row: SessionRecord): SessionRecord {
   }
   if (!isValidDocuments(next.documents)) {
     next = { ...next, documents: { ...DEFAULT_DOCUMENTS_STATE } };
+  }
+  if (typeof next.pinned !== "boolean") {
+    next = { ...next, pinned: false };
   }
   return next;
 }

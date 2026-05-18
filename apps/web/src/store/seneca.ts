@@ -129,6 +129,13 @@ interface SenecaState {
   sessionUsage: SessionUsage;
   /** The most recent per-turn usage event, if any. */
   lastTurnUsage: LastTurnUsage | null;
+  /**
+   * Phase D — true while the "Welcome back" banner above the
+   * transcript is showing. Set to true when a session loads with a
+   * non-empty transcript; flipped off when the user sends a message
+   * or clicks the banner's dismiss button.
+   */
+  resumeBannerVisible: boolean;
 
   // ── voice
   setDockSide: (side: DockSide) => void;
@@ -150,6 +157,9 @@ interface SenecaState {
   appendTranscript: (msg: TranscriptMessage) => void;
   popLastTranscript: () => TranscriptMessage | null;
   patchLastSenecaTurn: (patch: Partial<TranscriptMessage>) => void;
+
+  // ── resume banner
+  dismissResumeBanner: () => void;
 
   // ── tabs
   setActiveTab: (tab: ActiveTab, opts?: { pulse?: boolean }) => void;
@@ -292,6 +302,7 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
   pendingToolResults: [],
   sessionUsage: { ...DEFAULT_SESSION_USAGE },
   lastTurnUsage: null,
+  resumeBannerVisible: false,
 
   setDockSide: (side) => {
     writeDockSide(side);
@@ -327,9 +338,17 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
     })),
   setVisionMode: (mode) => set({ vision: visionStateForMode(mode) }),
 
-  setTranscript: (transcript) => set({ transcript }),
+  setTranscript: (transcript) =>
+    set({ transcript, resumeBannerVisible: transcript.length > 0 }),
   appendTranscript: (msg) =>
-    set((s) => ({ transcript: [...s.transcript, msg] })),
+    set((s) => ({
+      transcript: [...s.transcript, msg],
+      // Any new turn (user or seneca) hides the welcome banner —
+      // the moment the user is interacting again, the hint has done
+      // its job.
+      resumeBannerVisible: false,
+    })),
+  dismissResumeBanner: () => set({ resumeBannerVisible: false }),
   popLastTranscript: () => {
     const cur = get().transcript;
     if (cur.length === 0) return null;
@@ -380,6 +399,11 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
       tabPulseTarget: null,
       sessionUsage: { ...DEFAULT_SESSION_USAGE },
       lastTurnUsage: null,
+      // Phase D — show a "Welcome back" hint above the transcript
+      // when the loaded session has prior context. Brand-new
+      // sessions skip the banner so the empty-state copy speaks for
+      // itself.
+      resumeBannerVisible: transcript.length > 0,
     }),
 
   setWhiteboard: (state) => set({ whiteboard: state }),

@@ -1,15 +1,24 @@
 /**
- * SessionsModal — Priority 2 / Phase 3.
+ * SessionsModal — Priority 2 / Phase 3 (created), Phase D (cards +
+ * search + pin + export).
  *
- * Lists every session the user owns, lets them create / rename / delete,
- * and switches the active session (which fully re-hydrates the canvas
- * via `loadSession`). Switching also abort the in-flight `runTurn`
- * stream if any, so a long-running answer in the prior session can't
- * leak into the new one.
+ * Lists every session the user owns, lets them create / rename /
+ * delete / pin / export, and switches the active session (which
+ * fully re-hydrates the canvas via `loadSession`). Switching also
+ * aborts the in-flight `runTurn` stream if any, so a long-running
+ * answer in the prior session can't leak into the new one.
+ *
+ * Phase D additions:
+ *   - Preview cards: snippet of the last user message, document
+ *     count, and small icons for the canvas tabs that were used.
+ *   - Search input that filters by session name + snippet text.
+ *   - Pin / unpin star — pinned sessions sort to the top.
+ *   - Per-session Download menu item that exports a markdown
+ *     transcript of the row.
  *
  * Rendered via a portal so the modal escapes the header's
- * `backdrop-filter`, which would otherwise turn `position: fixed` into
- * `position: absolute` (same gotcha SettingsModal hit).
+ * `backdrop-filter`, which would otherwise turn `position: fixed`
+ * into `position: absolute` (same gotcha SettingsModal hit).
  */
 
 import {
@@ -32,13 +41,16 @@ import {
   fetchSessionRow,
   listSessions,
   renameSession,
+  setSessionPinned,
   type SessionSummary,
+  type SessionTabFlag,
 } from "../../lib/sessions";
 import {
   normalizeDocuments,
   normalizeMap,
   normalizeWeb,
 } from "../../lib/sessionNormalizers";
+import { downloadSessionMarkdown } from "../../lib/sessionExport";
 
 interface Props {
   open: boolean;
@@ -57,12 +69,15 @@ export function SessionsModal({ open, onClose }: Props) {
 
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<ActiveDialog>({
     kind: "none",
   });
   const [busy, setBusy] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   const overlayRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -77,6 +92,9 @@ export function SessionsModal({ open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     void refresh();
+    // Defer focus until the portal mounts so React doesn't strip it.
+    const id = window.setTimeout(() => searchRef.current?.focus(), 50);
+    return () => window.clearTimeout(id);
   }, [open, refresh]);
 
   useEffect(() => {
@@ -170,7 +188,6 @@ export function SessionsModal({ open, onClose }: Props) {
         await renameSession(id, trimmed);
         setActiveDialog({ kind: "none" });
         await refresh();
-        // If we just renamed the active session, sync the header label.
         if (id === sessionId) {
           useSenecaStore.getState().setSession(id, trimmed);
         }
@@ -189,9 +206,6 @@ export function SessionsModal({ open, onClose }: Props) {
       try {
         await deleteSession(id);
         setActiveDialog({ kind: "none" });
-        // If the user deleted the session they're currently in, fall
-        // back to whichever session is most recently used (or create a
-        // fresh one if they wiped everything).
         if (id === sessionId) {
           const remaining = (sessions ?? []).filter((s) => s.id !== id);
           if (remaining.length > 0) {
@@ -221,12 +235,57 @@ export function SessionsModal({ open, onClose }: Props) {
     [sessionId, sessions, handleSwitch, refresh, loadSession, onClose],
   );
 
+  const handleTogglePin = useCallback(
+    async (id: string, current: boolean) => {
+      const next = !current;
+      // Optimistic local flip so the star feels instant.
+      setSessions((prev) =>
+        prev ? prev.map((s) => (s.id === id ? { ...s, pinned: next } : s)) : prev,
+      );
+      try {
+        await setSessionPinned(id, next);
+        // Re-list to get the server-side sort (pinned first).
+        await refresh();
+      } catch (err) {
+        // Roll back on failure.
+        setSessions((prev) =>
+          prev
+            ? prev.map((s) => (s.id === id ? { ...s, pinned: current } : s))
+            : prev,
+        );
+        setLoadError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [refresh],
+  );
+
+  const handleExport = useCallback(async (id: string) => {
+    setBusy(`export:${id}`);
+    setExportError(null);
+    try {
+      const row = await fetchSessionRow(id);
+      downloadSessionMarkdown(row);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
   const sortedSessions = useMemo(() => {
     if (!sessions) return null;
-    return [...sessions].sort((a, b) =>
-      a.updated_at < b.updated_at ? 1 : -1,
-    );
-  }, [sessions]);
+    const sorted = [...sessions].sort((a, b) => {
+      if ((a.pinned === true) !== (b.pinned === true)) {
+        return a.pinned === true ? -1 : 1;
+      }
+      const aWhen = a.lastMessageAt ?? a.updated_at;
+      const bWhen = b.lastMessageAt ?? b.updated_at;
+      return aWhen < bWhen ? 1 : -1;
+    });
+    const q = query.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter((s) => matchesQuery(s, q));
+  }, [sessions, query]);
 
   if (!open) return null;
 
@@ -239,7 +298,7 @@ export function SessionsModal({ open, onClose }: Props) {
       aria-modal="true"
       aria-label="Sessions"
     >
-      <div className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-soft dark:shadow-soft-dark">
+      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-soft dark:shadow-soft-dark">
         <header className="flex items-center justify-between border-b border-border px-5 py-3">
           <h2 className="font-serif text-lg text-fg">Sessions</h2>
           <div className="flex items-center gap-2">
@@ -261,27 +320,52 @@ export function SessionsModal({ open, onClose }: Props) {
           </div>
         </header>
 
+        <div className="border-b border-border px-5 py-2">
+          <label className="sr-only" htmlFor="sessions-search">
+            Search sessions
+          </label>
+          <div className="relative">
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-fg-subtle"
+            >
+              ⌕
+            </span>
+            <input
+              ref={searchRef}
+              id="sessions-search"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name or last question…"
+              className="w-full rounded-md border border-border bg-surface py-1.5 pl-7 pr-3 text-sm text-fg outline-none transition-colors focus:border-accent"
+            />
+          </div>
+        </div>
+
         {loadError && (
           <div className="border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger-fg">
             {loadError}
           </div>
         )}
+        {exportError && (
+          <div className="border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger-fg">
+            Export failed: {exportError}
+          </div>
+        )}
 
-        <div className="flex-1 overflow-y-auto px-2 py-2">
+        <div className="flex-1 overflow-y-auto px-3 py-3">
           {sortedSessions === null ? (
             <div className="px-3 py-6 text-center text-sm text-fg-muted">
               Loading sessions…
             </div>
           ) : sortedSessions.length === 0 ? (
-            <div className="px-3 py-6 text-center text-sm text-fg-muted">
-              You don't have any sessions yet. Click{" "}
-              <strong>New session</strong> above to start one.
-            </div>
+            <EmptyState query={query} />
           ) : (
-            <ul className="flex flex-col gap-1">
+            <ul className="flex flex-col gap-2">
               {sortedSessions.map((row) => (
                 <li key={row.id}>
-                  <SessionRow
+                  <SessionCard
                     summary={row}
                     isActive={row.id === sessionId}
                     busy={busy}
@@ -300,6 +384,10 @@ export function SessionsModal({ open, onClose }: Props) {
                         name: row.name,
                       })
                     }
+                    onTogglePin={() =>
+                      void handleTogglePin(row.id, row.pinned === true)
+                    }
+                    onExport={() => void handleExport(row.id)}
                   />
                 </li>
               ))}
@@ -341,81 +429,206 @@ export function SessionsModal({ open, onClose }: Props) {
   );
 }
 
-interface SessionRowProps {
+function matchesQuery(s: SessionSummary, q: string): boolean {
+  if (s.name.toLowerCase().includes(q)) return true;
+  if (
+    typeof s.lastUserText === "string" &&
+    s.lastUserText.toLowerCase().includes(q)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function EmptyState({ query }: { query: string }) {
+  if (query.trim().length > 0) {
+    return (
+      <div className="px-3 py-6 text-center text-sm text-fg-muted">
+        No sessions match "<span className="text-fg">{query}</span>". Try a
+        different search.
+      </div>
+    );
+  }
+  return (
+    <div className="px-3 py-6 text-center text-sm text-fg-muted">
+      You don't have any sessions yet. Click{" "}
+      <strong>New session</strong> above to start one.
+    </div>
+  );
+}
+
+interface SessionCardProps {
   summary: SessionSummary;
   isActive: boolean;
   busy: string | null;
   onSwitch: () => void;
   onRename: () => void;
   onDelete: () => void;
+  onTogglePin: () => void;
+  onExport: () => void;
 }
 
-function SessionRow({
+function SessionCard({
   summary,
   isActive,
   busy,
   onSwitch,
   onRename,
   onDelete,
-}: SessionRowProps) {
+  onTogglePin,
+  onExport,
+}: SessionCardProps) {
   const switching = busy === summary.id;
+  const exporting = busy === `export:${summary.id}`;
+  const pinned = summary.pinned === true;
   return (
     <div
       className={clsx(
-        "group flex items-center gap-2 rounded-lg px-3 py-2 transition-colors",
-        isActive ? "bg-accent/10" : "hover:bg-surface-sunk",
+        "group relative flex flex-col gap-2 rounded-xl border px-3 py-2.5 transition-colors",
+        isActive
+          ? "border-accent/50 bg-accent/10"
+          : "border-border bg-surface hover:bg-surface-sunk",
       )}
     >
-      <button
-        type="button"
-        onClick={onSwitch}
-        disabled={switching}
-        className="flex min-w-0 flex-1 items-center gap-3 text-left disabled:cursor-progress"
-      >
-        <span
-          className={clsx(
-            "h-2.5 w-2.5 flex-shrink-0 rounded-full",
-            isActive ? "bg-accent" : "bg-fg-subtle/40",
-          )}
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1">
-          <p
+      <div className="flex items-start gap-2">
+        <button
+          type="button"
+          onClick={onSwitch}
+          disabled={switching}
+          className="flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-progress"
+        >
+          <span
             className={clsx(
-              "truncate text-sm",
-              isActive ? "font-medium text-fg" : "text-fg",
+              "mt-1.5 h-2.5 w-2.5 flex-shrink-0 rounded-full",
+              isActive ? "bg-accent" : "bg-fg-subtle/40",
             )}
+            aria-hidden
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <p
+                className={clsx(
+                  "min-w-0 truncate text-sm",
+                  isActive ? "font-medium text-fg" : "text-fg",
+                )}
+              >
+                {summary.name}
+              </p>
+              {pinned && (
+                <span
+                  aria-hidden
+                  title="Pinned"
+                  className="flex-shrink-0 text-[11px] text-accent"
+                >
+                  ★
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 truncate text-[11px] text-fg-subtle">
+              {summary.lastMessageAt
+                ? `Last activity ${formatTimeAgo(summary.lastMessageAt)}`
+                : `Updated ${formatTimeAgo(summary.updated_at)}`}
+              {typeof summary.documentCount === "number" &&
+                summary.documentCount > 0 && (
+                  <>
+                    {" · "}
+                    {summary.documentCount} document
+                    {summary.documentCount === 1 ? "" : "s"}
+                  </>
+                )}
+            </p>
+            {summary.lastUserText && (
+              <p className="mt-1 line-clamp-2 text-[12px] leading-snug text-fg-muted">
+                <span aria-hidden className="mr-1 text-fg-subtle">
+                  ❝
+                </span>
+                {summary.lastUserText}
+              </p>
+            )}
+          </div>
+          {switching && (
+            <span className="text-[11px] text-fg-muted">Loading…</span>
+          )}
+        </button>
+        <div className="flex flex-shrink-0 items-center gap-0.5">
+          <IconButton
+            label={pinned ? "Unpin" : "Pin"}
+            onClick={onTogglePin}
+            active={pinned}
           >
-            {summary.name}
-          </p>
-          <p className="truncate text-[11px] text-fg-subtle">
-            Updated {formatTimeAgo(summary.updated_at)}
-            {" · "}created {formatDate(summary.created_at)}
-          </p>
+            ★
+          </IconButton>
+          <IconButton
+            label={exporting ? "Exporting…" : "Download as markdown"}
+            onClick={onExport}
+            disabled={exporting}
+          >
+            ⤓
+          </IconButton>
+          <IconButton label="Rename" onClick={onRename} disabled={switching}>
+            ✎
+          </IconButton>
+          <IconButton
+            label="Delete"
+            onClick={onDelete}
+            disabled={switching}
+            danger
+          >
+            🗑
+          </IconButton>
         </div>
-        {switching && (
-          <span className="text-[11px] text-fg-muted">Loading…</span>
-        )}
-      </button>
-      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-        <IconButton
-          label="Rename"
-          onClick={onRename}
-          disabled={switching}
-        >
-          ✎
-        </IconButton>
-        <IconButton
-          label="Delete"
-          onClick={onDelete}
-          disabled={switching}
-          danger
-        >
-          🗑
-        </IconButton>
       </div>
+      {summary.tabs && summary.tabs.length > 0 && (
+        <TabFlags tabs={summary.tabs} />
+      )}
     </div>
   );
+}
+
+function TabFlags({ tabs }: { tabs: ReadonlyArray<SessionTabFlag> }) {
+  return (
+    <div
+      className="ml-5 flex flex-wrap items-center gap-1"
+      aria-label="Canvas tabs used in this session"
+    >
+      {tabs.map((tab) => (
+        <span
+          key={tab}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-fg-subtle"
+          title={tabLabel(tab)}
+        >
+          <span aria-hidden>{tabIcon(tab)}</span>
+          <span>{tabLabel(tab)}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function tabIcon(tab: SessionTabFlag): string {
+  switch (tab) {
+    case "documents":
+      return "📄";
+    case "web":
+      return "◐";
+    case "map":
+      return "◯";
+    case "whiteboard":
+      return "▦";
+  }
+}
+
+function tabLabel(tab: SessionTabFlag): string {
+  switch (tab) {
+    case "documents":
+      return "Docs";
+    case "web":
+      return "Web";
+    case "map":
+      return "Map";
+    case "whiteboard":
+      return "Board";
+  }
 }
 
 interface IconButtonProps {
@@ -423,6 +636,7 @@ interface IconButtonProps {
   onClick: () => void;
   disabled?: boolean;
   danger?: boolean;
+  active?: boolean;
   children: React.ReactNode;
 }
 
@@ -431,6 +645,7 @@ function IconButton({
   onClick,
   disabled,
   danger,
+  active,
   children,
 }: IconButtonProps) {
   return (
@@ -442,9 +657,11 @@ function IconButton({
       aria-label={label}
       className={clsx(
         "flex h-7 w-7 items-center justify-center rounded-md text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-        danger
-          ? "text-danger hover:bg-danger-soft"
-          : "text-fg-muted hover:bg-surface hover:text-fg",
+        active
+          ? "text-accent hover:bg-accent/15"
+          : danger
+            ? "text-danger hover:bg-danger-soft"
+            : "text-fg-muted hover:bg-surface hover:text-fg",
       )}
     >
       {children}

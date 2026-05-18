@@ -328,3 +328,57 @@ describe("resetUsage", () => {
     expect(useSenecaStore.getState().sessionUsage.inputCostUSD).toBe(0);
   });
 });
+
+describe("resumeBanner (Phase D)", () => {
+  it("loadSession shows the banner when the transcript has prior context", () => {
+    useSenecaStore.getState().loadSession({
+      id: "sess-banner-1",
+      name: "Old session",
+      transcript: sampleTranscript,
+      whiteboard: sampleWhiteboard,
+      map: sampleMap,
+      web: sampleWeb,
+      documents: sampleDocuments,
+    });
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(true);
+  });
+
+  it("loadSession hides the banner when the transcript is empty", () => {
+    useSenecaStore.getState().loadSession({
+      id: "sess-banner-2",
+      name: "Fresh",
+      transcript: [],
+      whiteboard: sampleWhiteboard,
+      map: sampleMap,
+      web: sampleWeb,
+      documents: sampleDocuments,
+    });
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(false);
+  });
+
+  it("setTranscript mirrors loadSession's visibility rule", () => {
+    useSenecaStore.getState().setTranscript(sampleTranscript);
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(true);
+    useSenecaStore.getState().setTranscript([]);
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(false);
+  });
+
+  it("appendTranscript dismisses the banner once a new turn arrives", () => {
+    useSenecaStore.getState().setTranscript(sampleTranscript);
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(true);
+    useSenecaStore.getState().appendTranscript({
+      id: "u2",
+      role: "user",
+      text: "next question",
+      ts: "2024-01-01T01:00:00.000Z",
+    });
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(false);
+  });
+
+  it("dismissResumeBanner hides it without touching the transcript", () => {
+    useSenecaStore.getState().setTranscript(sampleTranscript);
+    useSenecaStore.getState().dismissResumeBanner();
+    expect(useSenecaStore.getState().resumeBannerVisible).toBe(false);
+    expect(useSenecaStore.getState().transcript).toEqual(sampleTranscript);
+  });
+});

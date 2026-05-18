@@ -130,18 +130,43 @@ sessionsRouter.patch(
       res.status(400).json({ error: "Missing session id." });
       return;
     }
-    const body = (req.body ?? {}) as { name?: unknown };
-    const rawName = typeof body.name === "string" ? body.name.trim() : "";
-    if (rawName.length === 0) {
-      res.status(400).json({ error: "Body must be { name: string }." });
+    const body = (req.body ?? {}) as { name?: unknown; pinned?: unknown };
+
+    // Phase D — `name` and `pinned` are independent partial updates so
+    // the modal can star a row without re-prompting the user for a name.
+    // The body must include at least one of the two known fields.
+    const hasName = "name" in body;
+    const hasPinned = "pinned" in body;
+    if (!hasName && !hasPinned) {
+      res.status(400).json({
+        error: "Body must include { name } or { pinned } (or both).",
+      });
       return;
     }
-    if (rawName.length > 120) {
-      res.status(400).json({ error: "name must be 120 characters or fewer." });
-      return;
-    }
+
     try {
-      await sessionStore.rename(id, req.user.id, rawName, req.jwt);
+      if (hasName) {
+        const rawName =
+          typeof body.name === "string" ? (body.name as string).trim() : "";
+        if (rawName.length === 0) {
+          res.status(400).json({ error: "name cannot be blank." });
+          return;
+        }
+        if (rawName.length > 120) {
+          res
+            .status(400)
+            .json({ error: "name must be 120 characters or fewer." });
+          return;
+        }
+        await sessionStore.rename(id, req.user.id, rawName, req.jwt);
+      }
+      if (hasPinned) {
+        if (typeof body.pinned !== "boolean") {
+          res.status(400).json({ error: "pinned must be a boolean." });
+          return;
+        }
+        await sessionStore.setPinned(id, req.user.id, body.pinned, req.jwt);
+      }
       res.status(204).end();
     } catch (err) {
       res

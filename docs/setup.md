@@ -165,6 +165,10 @@ Without the key, `/api/tts/config` reports `available: false`, the picker stays 
      -- Phase 4 cost telemetry. Nullable; the API lazily populates it on
      -- the first turn that completes after the migration runs.
      usage jsonb,
+     -- Phase D — pinned sessions sort to the top in the SessionsModal.
+     -- Defaults to false so existing rows light up "not pinned" without
+     -- a backfill step.
+     pinned boolean not null default false,
      created_at timestamptz default now(),
      updated_at timestamptz default now()
    );
@@ -402,6 +406,15 @@ Without the key, `/api/tts/config` reports `available: false`, the picker stays 
 > -- a turn (see `bumpUsage` in apps/api/src/lib/sessionStore.ts).
 > alter table sessions
 >   add column if not exists usage jsonb;
+>
+> -- Phase D — star / pin flag used by the SessionsModal to keep
+> -- frequently-used sessions at the top of the list. Default false so
+> -- existing rows preserve their current order. The list endpoint and
+> -- the `setPinned` store method both gracefully tolerate the column's
+> -- absence pre-migration, so you can defer this without breaking the
+> -- modal.
+> alter table sessions
+>   add column if not exists pinned boolean not null default false;
 >
 > insert into storage.buckets (id, name, public)
 > values ('seneca-documents', 'seneca-documents', false)

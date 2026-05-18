@@ -466,6 +466,12 @@ export interface SessionRecord {
    * once a turn runs against them.
    */
   usage?: SessionUsage;
+  /**
+   * Phase D — true when the user has starred this session. Pinned
+   * sessions sort to the top of the sessions list / modal. Absent on
+   * rows that pre-date the migration; treat `undefined` as `false`.
+   */
+  pinned?: boolean;
   created_at: string;
   updated_at: string;
 }

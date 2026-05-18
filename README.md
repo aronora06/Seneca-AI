@@ -41,7 +41,8 @@ Every MVP slice in vision §7 has shipped, plus the document-intelligence depth 
 
 ### Sessions
 
-- **Persistent session list** — create, rename, delete (inline confirm), switch. The AppShell header opens a `SessionsModal`. Switching fully remounts the canvas via a `key={sessionId}` boundary.
+- **Persistent session list** — create, rename, delete (inline confirm), switch. The AppShell header opens a `SessionsModal`. Switching fully remounts the canvas via a `key={sessionId}` boundary. Preview cards show the last user question, document count, and which canvas tabs were used; a search input filters by name or transcript snippet; a star pins frequently-used sessions to the top; and a download icon exports any session as markdown.
+- **Resume hint** — when you switch into a session that already has context, a small "Welcome back" banner above the transcript reminds you what's loaded (open document + page, attached doc count, last question you asked). It disappears the moment you send a new message.
 - **Cascade delete** wipes pages, chunks, bytes, and the Storage bucket prefix together so a deleted session leaves nothing behind.
 - **Persistence** of the transcript (with persisted `tool_use` blocks), whiteboard scene, map state, web URL + history, documents metadata + active doc + per-doc current page, and rolling per-session cost totals (Postgres in real-auth mode, in-memory in dev-bypass).
 
