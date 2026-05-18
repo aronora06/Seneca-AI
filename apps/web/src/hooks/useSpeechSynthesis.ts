@@ -1,6 +1,9 @@
 /**
  * Wraps `window.speechSynthesis` in a React-friendly hook.
  *
+ * Reads voice, rate, and pitch preferences from userPreferences (localStorage).
+ * When the user changes them in Settings, the next `speak()` call picks them up.
+ *
  * Behaviour:
  *   - `speak(text)` queues an utterance. Successive calls queue rather than interrupt.
  *   - `pause()` / `resume()` toggle the engine globally.
@@ -8,10 +11,10 @@
  *   - `clear()` cancels everything queued.
  *   - `setMuted(true)` cancels any in-flight speech and prevents future `speak` calls
  *     from producing audio until muted is set back to false.
- *   - Picks the best available English voice once voices are loaded.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readPrefs } from "../lib/userPreferences";
 
 export interface SpeechSynthesisHook {
   supported: boolean;
@@ -26,13 +29,17 @@ export interface SpeechSynthesisHook {
   clear: () => void;
 }
 
-function pickVoice(): SpeechSynthesisVoice | null {
+function pickVoice(preferredURI: string | null): SpeechSynthesisVoice | null {
   if (typeof window === "undefined" || !("speechSynthesis" in window))
     return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices.length) return null;
 
-  // Prefer high-quality / "Natural" voices, English, anywhere.
+  if (preferredURI) {
+    const match = voices.find((v) => v.voiceURI === preferredURI);
+    if (match) return match;
+  }
+
   const score = (v: SpeechSynthesisVoice): number => {
     let n = 0;
     if (v.lang.startsWith("en")) n += 50;
@@ -57,7 +64,8 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
   useEffect(() => {
     if (!supported) return;
     const update = () => {
-      voiceRef.current = pickVoice();
+      const prefs = readPrefs();
+      voiceRef.current = pickVoice(prefs.ttsVoiceURI);
     };
     update();
     window.speechSynthesis.addEventListener("voiceschanged", update);
@@ -69,10 +77,17 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
   const speak = useCallback(
     (text: string) => {
       if (!supported || !text.trim() || muted) return;
+      const prefs = readPrefs();
+      if (!prefs.ttsAutoPlay && !muted) return;
+
       const utter = new SpeechSynthesisUtterance(text);
-      if (voiceRef.current) utter.voice = voiceRef.current;
-      utter.rate = 1.0;
-      utter.pitch = 1.0;
+      const voice = pickVoice(prefs.ttsVoiceURI);
+      if (voice) {
+        utter.voice = voice;
+        voiceRef.current = voice;
+      }
+      utter.rate = prefs.ttsRate;
+      utter.pitch = prefs.ttsPitch;
       utter.onstart = () => {
         setSpeaking(true);
         setPaused(false);
@@ -102,9 +117,6 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
 
   const skip = useCallback(() => {
     if (!supported) return;
-    // Cancel() flushes the queue; for a single-skip we can cancel and rely on
-    // the caller to push remaining items. For our simple use case (one
-    // assistant turn = one utterance), cancel == skip.
     window.speechSynthesis.cancel();
     setSpeaking(false);
     setPaused(false);
@@ -125,7 +137,6 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
     [clear],
   );
 
-  // Keep `speaking` in sync if the engine state drifts (e.g. external cancel).
   useEffect(() => {
     if (!supported) return;
     const i = window.setInterval(() => {

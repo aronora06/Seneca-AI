@@ -9,9 +9,9 @@ const TABS: Array<{
   hint?: string;
 }> = [
   { id: "whiteboard", label: "Whiteboard" },
-  { id: "documents", label: "Documents", disabled: true, hint: "Phase 3" },
-  { id: "web", label: "Web", disabled: true, hint: "Phase 3" },
-  { id: "map", label: "Map", disabled: true, hint: "Phase 3" },
+  { id: "map", label: "Map" },
+  { id: "web", label: "Web" },
+  { id: "documents", label: "Documents" },
 ];
 
 export function TabBar() {

@@ -63,6 +63,51 @@ Open http://localhost:5173. You should land straight in the app with a "Dev mode
 
 ---
 
+## 2.5 Optional: enable web search (Tavily)
+
+The Web tab works without this — Seneca can still navigate to URLs you (or he) already know — but `web_search` will return a friendly "configure Tavily" error until you add a key.
+
+1. Go to https://app.tavily.com and sign up. Free tier is generous (1,000 searches/month at the time of writing).
+2. From the dashboard, copy your API key (starts with `tvly-`).
+3. Open `apps/api/.env` and add:
+
+   ```
+   TAVILY_API_KEY=tvly-...
+   ```
+
+4. Restart `pnpm dev` (or just the API) so the new env value is picked up.
+
+Test it: open the Web tab and ask Seneca *"Find me a portrait of Spinoza."* You should see a card list of results overlaid on the page area, each clickable to navigate.
+
+---
+
+## 2.6 Optional: enable semantic document search (Voyage AI)
+
+`document_search` works without this — it falls back to a naive case-insensitive substring scan over each page's extracted text — but a 400-page PDF whose phrasing doesn't match the user's query verbatim will miss most of the relevant pages. Adding a Voyage AI key flips on cosine-similarity top-k retrieval over chunked embeddings instead.
+
+1. Go to https://www.voyageai.com/ and sign up. You can run a small dev workload entirely on Voyage's free tier (~$0 the first month).
+2. From the dashboard's API Keys page, copy your key (starts with `pa-`).
+3. Open `apps/api/.env` and add:
+
+   ```
+   VOYAGE_API_KEY=pa-...
+   # Optional — defaults to voyage-3-large (1024-dim, best quality). Swap
+   # to voyage-3-lite for a cheaper model with shorter embeddings if you
+   # want; the chunk store column type assumes 1024 dims though, so
+   # changing the dim requires changing the migration too.
+   VOYAGE_MODEL=voyage-3-large
+   ```
+
+4. Restart `pnpm dev` so the API picks up the key. The boot log will print all tools loaded; document upload will additionally print `indexed N chunks in Xms` when each PDF lands.
+
+Test it: upload a multi-page paper and ask Seneca *"Where does the author discuss X?"* using a phrase that's not literally in the doc. With Voyage on, he'll find the relevant page semantically. Without Voyage, he'd only hit if the literal phrase appears.
+
+> Dev-bypass mode: chunks + embeddings live in a process-local map; brute-force cosine on every query. Fine for the few-thousand chunks a dev session holds.
+>
+> Real-auth mode: chunks live in a `pgvector`-backed Postgres table with an `ivfflat` index; see §3.1 step 6.5 below for the migration. Skip the table creation if `VOYAGE_API_KEY` is empty — search degrades gracefully to substring without it.
+
+---
+
 ## 3. Real-auth mode (for deploying or testing real login)
 
 ### 3.1 Create a Supabase project
@@ -83,6 +128,15 @@ Open http://localhost:5173. You should land straight in the app with a "Dev mode
      name text not null default 'Untitled',
      transcript jsonb not null default '[]'::jsonb,
      whiteboard jsonb not null default '{}'::jsonb,
+     map jsonb not null default
+       '{"center":[20,0],"zoom":2,"layer":"standard","pins":[],"shapes":[]}'::jsonb,
+     web jsonb not null default
+       '{"url":null,"history":[],"historyIndex":-1}'::jsonb,
+     documents jsonb not null default
+       '{"items":[],"activeId":null}'::jsonb,
+     -- Phase 4 cost telemetry. Nullable; the API lazily populates it on
+     -- the first turn that completes after the migration runs.
+     usage jsonb,
      created_at timestamptz default now(),
      updated_at timestamptz default now()
    );
@@ -120,7 +174,326 @@ Open http://localhost:5173. You should land straight in the app with a "Dev mode
      for each row execute function touch_sessions_updated_at();
    ```
 
-6. Go to **Authentication → Sign In / Up** and turn **off** "Confirm email" for easy local testing. You can re-enable it before going public.
+6. Still in the **SQL Editor**, create the `document_pages` table that backs server-side text extraction (Priority 1a — used by the `document_read_page` tool so Seneca can read PDFs without burning vision tokens):
+
+   ```sql
+   create table if not exists document_pages (
+     id uuid primary key default gen_random_uuid(),
+     doc_id uuid not null,
+     -- Phase 3 / Priority 2: denormalised `session_id` so the session
+     -- delete cascade can wipe orphan rows (e.g. crashed uploads not
+     -- yet in `sessions.documents.items`) in a single statement.
+     session_id uuid,
+     page int not null,
+     text text not null default '',
+     char_count int not null default 0,
+     created_at timestamptz default now(),
+     unique (doc_id, page)
+   );
+
+   create index if not exists document_pages_doc_id_idx on document_pages (doc_id);
+
+   alter table document_pages enable row level security;
+
+   -- The Seneca API writes / reads through the service-role key (which
+   -- bypasses RLS), but these policies are belt-and-braces in case anyone
+   -- ever accesses the table directly with a user JWT. Ownership is
+   -- enforced via the join to sessions.user_id — a page row belongs to
+   -- whoever owns its session, which we look up via the doc_id stored
+   -- inside `sessions.documents` JSONB.
+   create policy "owner can read own document pages"
+     on document_pages for select
+     to authenticated
+     using (
+       exists (
+         select 1 from sessions
+         where sessions.user_id = auth.uid()
+           and sessions.documents -> 'items' @> jsonb_build_array(
+             jsonb_build_object('id', document_pages.doc_id::text)
+           )
+       )
+     );
+   ```
+
+   We don't add insert / update / delete policies because only the
+   service role ever writes here. Locking them out keeps the surface
+   small.
+
+6.5. **(Optional but recommended)** Still in the **SQL Editor**, enable `pgvector` and create the `document_chunks` table that backs semantic search (Priority 1b — used by the `document_search` tool when `VOYAGE_API_KEY` is set). Skip this block if you didn't set up Voyage in §2.6 — search will degrade to substring without it, which still works:
+
+   ```sql
+   -- pgvector extension. Idempotent. Lives in the `extensions` schema
+   -- by default; Supabase will auto-grant the API roles access.
+   create extension if not exists vector;
+
+   create table if not exists document_chunks (
+     id uuid primary key default gen_random_uuid(),
+     doc_id uuid not null,
+     -- Phase 3 / Priority 2: denormalised `session_id` so the session
+     -- delete cascade can wipe orphan rows in a single statement.
+     session_id uuid,
+     page int not null,
+     chunk_index int not null,
+     text text not null,
+     -- 1024 dims matches Voyage's voyage-3-large default. If you change
+     -- VOYAGE_MODEL to a model with a different output dim, change this
+     -- column type and rebuild the index.
+     embedding vector(1024) not null,
+     created_at timestamptz default now()
+   );
+
+   -- ivfflat with cosine ops is the recommended index for ANN search
+   -- under pgvector. The list count is a tuning knob; 100 is a sensible
+   -- default for up to ~1M chunks.
+   create index if not exists document_chunks_embedding_idx
+     on document_chunks
+     using ivfflat (embedding vector_cosine_ops)
+     with (lists = 100);
+
+   create index if not exists document_chunks_doc_id_idx
+     on document_chunks (doc_id);
+
+   alter table document_chunks enable row level security;
+
+   -- Same join-through-sessions pattern as document_pages.
+   create policy "owner can read own document chunks"
+     on document_chunks for select
+     to authenticated
+     using (
+       exists (
+         select 1 from sessions
+         where sessions.user_id = auth.uid()
+           and sessions.documents -> 'items' @> jsonb_build_array(
+             jsonb_build_object('id', document_chunks.doc_id::text)
+           )
+       )
+     );
+
+   -- RPC for cosine top-k. The JS client can't express `<=>` through
+   -- postgrest, so we tunnel the math through a security-definer
+   -- function. `match_doc_id` is optional — pass null to search every
+   -- chunk the caller can see.
+   create or replace function match_document_chunks(
+     query_embedding vector(1024),
+     match_doc_id uuid,
+     match_count int
+   )
+   returns table (
+     doc_id uuid,
+     page int,
+     chunk_index int,
+     text text,
+     score float4
+   )
+   language sql stable security definer
+   as $$
+     select
+       dc.doc_id,
+       dc.page,
+       dc.chunk_index,
+       dc.text,
+       -- pgvector's <=> returns cosine *distance* in [0, 2]. Convert to
+       -- normalised similarity in [0, 1] matching cosineSimilarity().
+       (1 - (dc.embedding <=> query_embedding) / 2)::float4 as score
+     from document_chunks dc
+     where match_doc_id is null or dc.doc_id = match_doc_id
+     order by dc.embedding <=> query_embedding
+     limit match_count
+   $$;
+
+   grant execute on function match_document_chunks(vector(1024), uuid, int)
+     to authenticated, service_role;
+   ```
+
+   Reuse the same belt-and-braces RLS shape as `document_pages` — only the service role writes, and the policy on read is for hypothetical direct-from-client access.
+
+7. Still in the **SQL Editor**, create the private Storage bucket and access policies for uploaded PDFs:
+
+   ```sql
+   insert into storage.buckets (id, name, public)
+   values ('seneca-documents', 'seneca-documents', false)
+   on conflict (id) do nothing;
+
+   -- Path scheme is {userId}/{sessionId}/{docId}.pdf — the first folder
+   -- is the owning user, so we key access off of that.
+
+   create policy "owner can read own seneca docs"
+     on storage.objects for select
+     to authenticated
+     using (
+       bucket_id = 'seneca-documents'
+       and (storage.foldername(name))[1] = auth.uid()::text
+     );
+
+   create policy "owner can insert own seneca docs"
+     on storage.objects for insert
+     to authenticated
+     with check (
+       bucket_id = 'seneca-documents'
+       and (storage.foldername(name))[1] = auth.uid()::text
+     );
+
+   create policy "owner can update own seneca docs"
+     on storage.objects for update
+     to authenticated
+     using (
+       bucket_id = 'seneca-documents'
+       and (storage.foldername(name))[1] = auth.uid()::text
+     );
+
+   create policy "owner can delete own seneca docs"
+     on storage.objects for delete
+     to authenticated
+     using (
+       bucket_id = 'seneca-documents'
+       and (storage.foldername(name))[1] = auth.uid()::text
+     );
+   ```
+
+   The Seneca API actually writes / reads bytes through the service-role key (which bypasses RLS), but these policies are belt-and-braces in case anyone ever accesses the bucket directly with a user JWT.
+
+8. Go to **Authentication → Sign In / Up** and turn **off** "Confirm email" for easy local testing. You can re-enable it before going public.
+
+> **Already have a Supabase project from an earlier version of Seneca?** Run these migrations in the SQL editor to add new columns / tables / buckets without losing existing data:
+>
+> ```sql
+> alter table sessions
+>   add column if not exists map jsonb not null
+>   default '{"center":[20,0],"zoom":2,"layer":"standard","pins":[],"shapes":[]}'::jsonb;
+>
+> alter table sessions
+>   add column if not exists web jsonb not null
+>   default '{"url":null,"history":[],"historyIndex":-1}'::jsonb;
+>
+> alter table sessions
+>   add column if not exists documents jsonb not null
+>   default '{"items":[],"activeId":null}'::jsonb;
+>
+> -- Phase 4 / cost telemetry — rolling per-session token + USD totals.
+> -- Nullable so older rows backfill themselves the next time they take
+> -- a turn (see `bumpUsage` in apps/api/src/lib/sessionStore.ts).
+> alter table sessions
+>   add column if not exists usage jsonb;
+>
+> insert into storage.buckets (id, name, public)
+> values ('seneca-documents', 'seneca-documents', false)
+> on conflict (id) do nothing;
+>
+> -- Re-run the four storage policies from step 7 above.
+>
+> -- Priority 1a — per-page extracted PDF text. Required for the
+> -- document_read_page tool to work; without it Seneca falls back to
+> -- asking you to enable vision capture for every text read.
+> create table if not exists document_pages (
+>   id uuid primary key default gen_random_uuid(),
+>   doc_id uuid not null,
+>   page int not null,
+>   text text not null default '',
+>   char_count int not null default 0,
+>   created_at timestamptz default now(),
+>   unique (doc_id, page)
+> );
+>
+> create index if not exists document_pages_doc_id_idx on document_pages (doc_id);
+>
+> alter table document_pages enable row level security;
+>
+> create policy "owner can read own document pages"
+>   on document_pages for select
+>   to authenticated
+>   using (
+>     exists (
+>       select 1 from sessions
+>       where sessions.user_id = auth.uid()
+>         and sessions.documents -> 'items' @> jsonb_build_array(
+>           jsonb_build_object('id', document_pages.doc_id::text)
+>         )
+>     )
+>   );
+>
+> -- Priority 1b — chunk-level embeddings used by document_search. Skip
+> -- this block if you don't intend to set VOYAGE_API_KEY (search will
+> -- degrade to substring without it).
+> create extension if not exists vector;
+>
+> create table if not exists document_chunks (
+>   id uuid primary key default gen_random_uuid(),
+>   doc_id uuid not null,
+>   page int not null,
+>   chunk_index int not null,
+>   text text not null,
+>   embedding vector(1024) not null,
+>   created_at timestamptz default now()
+> );
+>
+> create index if not exists document_chunks_embedding_idx
+>   on document_chunks
+>   using ivfflat (embedding vector_cosine_ops)
+>   with (lists = 100);
+>
+> create index if not exists document_chunks_doc_id_idx
+>   on document_chunks (doc_id);
+>
+> alter table document_chunks enable row level security;
+>
+> create policy "owner can read own document chunks"
+>   on document_chunks for select
+>   to authenticated
+>   using (
+>     exists (
+>       select 1 from sessions
+>       where sessions.user_id = auth.uid()
+>         and sessions.documents -> 'items' @> jsonb_build_array(
+>           jsonb_build_object('id', document_chunks.doc_id::text)
+>         )
+>     )
+>   );
+>
+> create or replace function match_document_chunks(
+>   query_embedding vector(1024),
+>   match_doc_id uuid,
+>   match_count int
+> )
+> returns table (
+>   doc_id uuid,
+>   page int,
+>   chunk_index int,
+>   text text,
+>   score float4
+> )
+> language sql stable security definer
+> as $$
+>   select
+>     dc.doc_id, dc.page, dc.chunk_index, dc.text,
+>     (1 - (dc.embedding <=> query_embedding) / 2)::float4
+>   from document_chunks dc
+>   where match_doc_id is null or dc.doc_id = match_doc_id
+>   order by dc.embedding <=> query_embedding
+>   limit match_count
+> $$;
+>
+> grant execute on function match_document_chunks(vector(1024), uuid, int)
+>   to authenticated, service_role;
+>
+> -- Phase 3 / Priority 2 — denormalised `session_id` on the two
+> -- document side tables so the session-delete cascade can wipe orphan
+> -- pages / chunks (uploads that crashed before being added to
+> -- `sessions.documents.items`) in a single statement. Backfill is a
+> -- no-op on empty tables; on populated ones, leave the column NULL —
+> -- existing rows stay invisible via RLS and the per-doc cascade still
+> -- finds them through `sessions.documents.items`.
+> alter table document_pages
+>   add column if not exists session_id uuid;
+>
+> alter table document_chunks
+>   add column if not exists session_id uuid;
+>
+> create index if not exists document_pages_session_id_idx
+>   on document_pages (session_id);
+>
+> create index if not exists document_chunks_session_id_idx
+>   on document_chunks (session_id);
+> ```
 
 ### 3.2 Switch the `.env` files out of bypass
 

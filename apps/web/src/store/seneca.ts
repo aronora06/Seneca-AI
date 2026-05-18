@@ -9,11 +9,17 @@
 
 import { create } from "zustand";
 import type {
+  DocumentsState,
+  MapState,
+  SessionUsage,
   ToolCallRecord,
   ToolResult,
   TranscriptMessage,
+  UsageStreamEvent,
+  WebState,
   WhiteboardState,
 } from "@seneca/shared";
+import { DEFAULT_SESSION_USAGE } from "@seneca/shared";
 
 export type DockSide = "left" | "right";
 export type VoiceMode = "idle" | "listening" | "speaking";
@@ -43,6 +49,21 @@ interface StreamingState {
   pendingActionLog: ToolCallRecord[];
 }
 
+/**
+ * Phase 4: the most recent per-turn cost reading, used for the
+ * "$0.04 turn" half of the header pill. Cleared on session switch and
+ * on `beginTurn`.
+ */
+interface LastTurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  inputCostUSD: number;
+  outputCostUSD: number;
+  model: string;
+}
+
 interface SessionState {
   id: string | null;
   name: string;
@@ -56,9 +77,16 @@ interface SenecaState {
   activeTab: ActiveTab;
   tabPulseTarget: ActiveTab | null;
   whiteboard: WhiteboardState | null;
+  mapState: MapState | null;
+  webState: WebState | null;
+  documentsState: DocumentsState | null;
   streaming: StreamingState;
   /** Tool results pending delivery to Seneca on the next request. */
   pendingToolResults: ToolResult[];
+  /** Rolling per-session token + USD totals (Phase 4). */
+  sessionUsage: SessionUsage;
+  /** The most recent per-turn usage event, if any. */
+  lastTurnUsage: LastTurnUsage | null;
 
   // ── voice
   setDockSide: (side: DockSide) => void;
@@ -85,9 +113,34 @@ interface SenecaState {
 
   // ── session
   setSession: (id: string, name?: string) => void;
+  /**
+   * Atomic session switch: replaces every per-session slice in a single
+   * `set` call, clears the in-flight streaming + pending tool result
+   * queue, and resets vision so it doesn't bleed across sessions.
+   * Mounting / unmounting of canvas tabs is left to the AppShell via
+   * `<CanvasContainer key={sessionId} />`.
+   */
+  loadSession: (input: {
+    id: string;
+    name: string;
+    transcript: TranscriptMessage[];
+    whiteboard: WhiteboardState;
+    map: MapState;
+    web: WebState;
+    documents: DocumentsState;
+  }) => void;
 
   // ── whiteboard
   setWhiteboard: (state: WhiteboardState) => void;
+
+  // ── map
+  setMap: (state: MapState) => void;
+
+  // ── web
+  setWeb: (state: WebState) => void;
+
+  // ── documents
+  setDocuments: (state: DocumentsState) => void;
 
   // ── streaming
   beginTurn: (turnId: string) => void;
@@ -102,6 +155,11 @@ interface SenecaState {
   // ── tool results queue
   enqueueToolResult: (result: ToolResult) => void;
   drainToolResults: () => ToolResult[];
+
+  // ── cost telemetry (Phase 4)
+  applyUsageEvent: (event: UsageStreamEvent) => void;
+  setSessionUsage: (usage: SessionUsage) => void;
+  resetUsage: () => void;
 }
 
 const DOCK_STORAGE_KEY = "seneca:dockSide";
@@ -155,12 +213,17 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
   activeTab: "whiteboard",
   tabPulseTarget: null,
   whiteboard: null,
+  mapState: null,
+  webState: null,
+  documentsState: null,
   streaming: {
     activeTurnId: null,
     partialText: "",
     pendingActionLog: [],
   },
   pendingToolResults: [],
+  sessionUsage: { ...DEFAULT_SESSION_USAGE },
+  lastTurnUsage: null,
 
   setDockSide: (side) => {
     writeDockSide(side);
@@ -227,7 +290,34 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
   setSession: (id, name) =>
     set((s) => ({ session: { id, name: name ?? s.session.name } })),
 
+  loadSession: ({ id, name, transcript, whiteboard, map, web, documents }) =>
+    set({
+      session: { id, name },
+      transcript,
+      whiteboard,
+      mapState: map,
+      webState: web,
+      documentsState: documents,
+      streaming: {
+        activeTurnId: null,
+        partialText: "",
+        pendingActionLog: [],
+      },
+      pendingToolResults: [],
+      vision: { enabled: false, pinned: false },
+      activeTab: "whiteboard",
+      tabPulseTarget: null,
+      sessionUsage: { ...DEFAULT_SESSION_USAGE },
+      lastTurnUsage: null,
+    }),
+
   setWhiteboard: (state) => set({ whiteboard: state }),
+
+  setMap: (state) => set({ mapState: state }),
+
+  setWeb: (state) => set({ webState: state }),
+
+  setDocuments: (state) => set({ documentsState: state }),
 
   beginTurn: (turnId) =>
     set({
@@ -276,4 +366,40 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
     if (cur.length > 0) set({ pendingToolResults: [] });
     return cur;
   },
+
+  applyUsageEvent: (event) =>
+    set((s) => {
+      const cacheRead = event.cacheReadInputTokens ?? 0;
+      const cacheWrite = event.cacheCreationInputTokens ?? 0;
+      return {
+        lastTurnUsage: {
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
+          cacheReadInputTokens: cacheRead,
+          cacheCreationInputTokens: cacheWrite,
+          inputCostUSD: event.inputCostUSD,
+          outputCostUSD: event.outputCostUSD,
+          model: event.model,
+        },
+        sessionUsage: {
+          inputTokens: s.sessionUsage.inputTokens + event.inputTokens,
+          outputTokens: s.sessionUsage.outputTokens + event.outputTokens,
+          cacheReadInputTokens:
+            s.sessionUsage.cacheReadInputTokens + cacheRead,
+          cacheCreationInputTokens:
+            s.sessionUsage.cacheCreationInputTokens + cacheWrite,
+          inputCostUSD: s.sessionUsage.inputCostUSD + event.inputCostUSD,
+          outputCostUSD: s.sessionUsage.outputCostUSD + event.outputCostUSD,
+          updatedAt: new Date().toISOString(),
+        },
+      };
+    }),
+
+  setSessionUsage: (usage) => set({ sessionUsage: usage }),
+
+  resetUsage: () =>
+    set({
+      sessionUsage: { ...DEFAULT_SESSION_USAGE },
+      lastTurnUsage: null,
+    }),
 }));

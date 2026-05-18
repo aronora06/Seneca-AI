@@ -55,19 +55,22 @@ export function isTransientStatus(status: number): boolean {
 }
 
 interface JsonOptions {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  /** Optional AbortSignal so callers can cancel an in-flight request. */
+  signal?: AbortSignal;
 }
 
 export async function apiJson<T>(
   path: string,
-  { method = "GET", body }: JsonOptions = {},
+  { method = "GET", body, signal }: JsonOptions = {},
 ): Promise<T> {
   const token = await getToken();
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, {
       method,
+      signal,
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
@@ -75,6 +78,9 @@ export async function apiJson<T>(
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err;
+    }
     throw new ApiError(
       err instanceof Error ? err.message : "Network error",
       0,
@@ -86,6 +92,95 @@ export async function apiJson<T>(
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+interface BinaryUploadOptions {
+  method?: "POST" | "PUT";
+  /** Content-Type to send. Defaults to application/octet-stream. */
+  contentType?: string;
+  /** Optional headers (X-File-Name, etc.). Authorization is added for you. */
+  headers?: Record<string, string>;
+  /** When the response is JSON, set this so the helper parses it for you. */
+  parseJson?: boolean;
+  signal?: AbortSignal;
+}
+
+/**
+ * Send a raw byte body (Uint8Array / Blob / ArrayBuffer / Buffer-like) and
+ * optionally parse a JSON response. Used for the PDF upload route, which
+ * is `application/pdf` rather than `application/json`.
+ */
+export async function apiUploadBytes<T>(
+  path: string,
+  body: BodyInit,
+  options: BinaryUploadOptions = {},
+): Promise<T> {
+  const {
+    method = "POST",
+    contentType = "application/octet-stream",
+    headers = {},
+    parseJson = true,
+    signal,
+  } = options;
+  const token = await getToken();
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": contentType,
+        ...headers,
+      },
+      body,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err;
+    }
+    throw new ApiError(
+      err instanceof Error ? err.message : "Network error",
+      0,
+    );
+  }
+  if (!res.ok) {
+    const message = await safeMessage(res);
+    throw new ApiError(`${res.status} ${message}`, res.status, message);
+  }
+  if (res.status === 204) return undefined as T;
+  if (!parseJson) return undefined as T;
+  return (await res.json()) as T;
+}
+
+/** GET binary bytes (e.g. a PDF file) and return them as a Uint8Array. */
+export async function apiFetchBytes(
+  path: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Uint8Array> {
+  const token = await getToken();
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method: "GET",
+      signal: options.signal,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err;
+    }
+    throw new ApiError(
+      err instanceof Error ? err.message : "Network error",
+      0,
+    );
+  }
+  if (!res.ok) {
+    const message = await safeMessage(res);
+    throw new ApiError(`${res.status} ${message}`, res.status, message);
+  }
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
 }
 
 async function safeMessage(res: Response): Promise<string> {

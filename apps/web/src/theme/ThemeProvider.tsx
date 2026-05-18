@@ -1,14 +1,14 @@
 /**
- * ThemeProvider — single source of truth for light/dark mode.
+ * ThemeProvider — single source of truth for light/dark mode, accent
+ * colour, and font-size scale.
  *
- * Three settings:
+ * Light/dark settings:
  *   - "light" / "dark" — pinned by the user
  *   - "system" — follow `prefers-color-scheme`
  *
- * The user's choice is persisted to localStorage. The resolved class is
- * applied to <html>, which the Tailwind config keys off via `darkMode:
- * 'class'`. Other parts of the app (e.g. Excalidraw's `theme` prop) can
- * read the resolved value via `useTheme().resolved`.
+ * Accent colours and font-size come from userPreferences (localStorage).
+ * When they change, the corresponding CSS custom properties are written
+ * directly to `document.documentElement.style`.
  */
 
 import {
@@ -20,6 +20,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { getAccent } from "./accents";
+import {
+  readPrefs,
+  writePrefs,
+  type BackgroundStyle,
+  type FontSize,
+} from "../lib/userPreferences";
 
 export type ThemeChoice = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
@@ -28,6 +35,10 @@ interface ThemeContextValue {
   choice: ThemeChoice;
   resolved: ResolvedTheme;
   setChoice: (next: ThemeChoice) => void;
+  accentId: string;
+  setAccentId: (id: string) => void;
+  fontSize: FontSize;
+  setFontSize: (size: FontSize) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
@@ -61,14 +72,54 @@ function applyDomClass(theme: ResolvedTheme): void {
   root.classList.toggle("light", theme === "light");
 }
 
+function applyAccentVars(accentId: string, resolved: ResolvedTheme): void {
+  if (typeof document === "undefined") return;
+  const palette = getAccent(accentId);
+  const vals = resolved === "dark" ? palette.dark : palette.light;
+  const s = document.documentElement.style;
+  s.setProperty("--c-accent", vals.accent);
+  s.setProperty("--c-accent-soft", vals.accentSoft);
+  s.setProperty("--c-accent-fg", vals.accentFg);
+}
+
+const FONT_SCALE: Record<FontSize, string> = {
+  sm: "0.875",
+  md: "1",
+  lg: "1.125",
+};
+
+function applyFontSize(size: FontSize): void {
+  if (typeof document === "undefined") return;
+  document.documentElement.style.setProperty(
+    "--font-scale",
+    FONT_SCALE[size],
+  );
+}
+
+function applyBackgroundStyle(style: BackgroundStyle): void {
+  if (typeof document === "undefined") return;
+  if (style === "gradient") {
+    document.body.removeAttribute("data-bg");
+  } else {
+    document.body.setAttribute("data-bg", style);
+  }
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [choice, setChoiceState] = useState<ThemeChoice>(() => readStoredChoice());
   const [resolved, setResolved] = useState<ResolvedTheme>(() => resolve(readStoredChoice()));
 
-  // Apply on first render so there's no flash before any state changes.
+  const prefs = readPrefs();
+  const [accentId, setAccentIdState] = useState(prefs.accentId);
+  const [fontSize, setFontSizeState] = useState<FontSize>(prefs.fontSize);
+
+  // Apply DOM classes and CSS vars on first render.
   useEffect(() => {
     applyDomClass(resolved);
-  }, [resolved]);
+    applyAccentVars(accentId, resolved);
+    applyFontSize(fontSize);
+    applyBackgroundStyle(readPrefs().backgroundStyle);
+  }, [resolved, accentId, fontSize]);
 
   // React to system theme changes when the user is on "system".
   useEffect(() => {
@@ -76,15 +127,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     if (typeof window === "undefined" || !window.matchMedia) return;
     const mql = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (): void => {
-      setResolved(resolve("system"));
+      const next = resolve("system");
+      setResolved(next);
+      applyAccentVars(accentId, next);
     };
     mql.addEventListener("change", handler);
     return () => mql.removeEventListener("change", handler);
-  }, [choice]);
+  }, [choice, accentId]);
 
   const setChoice = useCallback((next: ThemeChoice) => {
     setChoiceState(next);
-    setResolved(resolve(next));
+    const r = resolve(next);
+    setResolved(r);
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {
@@ -92,9 +146,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setAccentId = useCallback(
+    (id: string) => {
+      setAccentIdState(id);
+      writePrefs({ accentId: id });
+      applyAccentVars(id, resolved);
+    },
+    [resolved],
+  );
+
+  const setFontSize = useCallback((size: FontSize) => {
+    setFontSizeState(size);
+    writePrefs({ fontSize: size });
+    applyFontSize(size);
+  }, []);
+
   const value = useMemo<ThemeContextValue>(
-    () => ({ choice, resolved, setChoice }),
-    [choice, resolved, setChoice],
+    () => ({ choice, resolved, setChoice, accentId, setAccentId, fontSize, setFontSize }),
+    [choice, resolved, setChoice, accentId, setAccentId, fontSize, setFontSize],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

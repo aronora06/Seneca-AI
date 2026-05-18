@@ -16,6 +16,7 @@
     "build:web": "pnpm --filter @seneca/shared build && pnpm --filter @seneca/web build",
     "build:api": "pnpm --filter @seneca/shared build && pnpm --filter @seneca/api build",
     "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @seneca/shared --filter @seneca/api --filter @seneca/web test",
     "lint": "pnpm -r lint",
     "clean": "pnpm -r exec rm -rf dist node_modules .turbo .vite"
   },

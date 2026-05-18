@@ -21,12 +21,13 @@
 import type {
   ChatRequest,
   SystemNotice,
-  ToolCallRecord,
+  ToolResult,
   TranscriptMessage,
 } from "@seneca/shared";
 import { ApiError, apiStream, isTransientStatus } from "./api";
 import { captureActiveTab } from "./captureCanvas";
 import { dispatchToolCall } from "./actionDispatcher";
+import { readPrefs } from "./userPreferences";
 import { useSenecaStore } from "../store/seneca";
 
 export interface RunTurnInput {
@@ -153,12 +154,13 @@ async function executeTurnOnce(input: RetryInput): Promise<ExecuteResult> {
   const turnId = crypto.randomUUID();
   useSenecaStore.getState().beginTurn(turnId);
 
-  // Tool results from prior turns are handled server-side by the agent loop
-  // (synthetic acks within the single Claude call). We deliberately do NOT
-  // forward them across turns — Claude's conversation history we send is
-  // text-only, so the tool_use_ids the client knows about would be orphans.
-  // We still drain the queue so old entries don't grow unbounded.
-  useSenecaStore.getState().drainToolResults();
+  // Cross-turn tool_result forwarding (Phase 3). Drain whatever the
+  // dispatcher queued during the LAST turn so we can attach it to this
+  // turn's request — the server prepends these to the latest user
+  // message so Claude sees how its prior tools actually fared.
+  const drainedToolResults: ToolResult[] = useSenecaStore
+    .getState()
+    .drainToolResults();
   const messagesToSend = useSenecaStore
     .getState()
     .transcript.filter((m) => m.role !== "system");
@@ -167,6 +169,10 @@ async function executeTurnOnce(input: RetryInput): Promise<ExecuteResult> {
   let fullText = "";
   let serverError: { type: "error"; message: string } | null = null;
 
+  const { customInstructions } = readPrefs();
+  const hasInstructions =
+    customInstructions.aboutYou.trim() || customInstructions.howToRespond.trim();
+
   try {
     await apiStream(
       path,
@@ -174,6 +180,8 @@ async function executeTurnOnce(input: RetryInput): Promise<ExecuteResult> {
         sessionId,
         messages: messagesToSend,
         image,
+        customInstructions: hasInstructions ? customInstructions : undefined,
+        toolResults: drainedToolResults.length > 0 ? drainedToolResults : undefined,
       },
       {
         onError: (err) => {
@@ -189,15 +197,33 @@ async function executeTurnOnce(input: RetryInput): Promise<ExecuteResult> {
               name: e.call.name,
               input: e.call.input,
             });
-            // We dispatch the tool locally but no longer enqueue a result
-            // for the next turn (see note above). Failures still surface in
-            // the chip's red state and via the next user turn naturally.
+            // Dispatch locally, then queue a ToolResult so the NEXT
+            // request can attach it as a `tool_result` block (Phase 3).
+            // Success cases use a short "ok" so the next turn doesn't
+            // re-explain context; failures carry the dispatcher's
+            // human-readable error so Claude can apologise gracefully.
             void dispatchToolCall(e.call).then((result) => {
               useSenecaStore.getState().updatePendingAction(e.call.id, {
                 ok: result.ok,
                 error: result.error,
               });
+              useSenecaStore.getState().enqueueToolResult({
+                toolUseId: e.call.id,
+                ok: result.ok,
+                error: result.error,
+              });
             });
+          } else if (e.type === "usage") {
+            // Phase 4: per-turn cost. The store does the accumulator
+            // math so the header pill can show "$0.04 turn · $0.61 session"
+            // without a derived selector everywhere.
+            useSenecaStore.getState().applyUsageEvent(e);
+          } else if (e.type === "documents-updated") {
+            // Phase 6: a server-fulfilled tool (e.g. `document_create`)
+            // mutated the session's DocumentsState. Patch the local
+            // store so the sidebar reflects the new entry without a
+            // full session reload.
+            useSenecaStore.getState().setDocuments(e.documents);
           } else if (e.type === "done") {
             fullText = e.fullText;
           } else if (e.type === "error") {

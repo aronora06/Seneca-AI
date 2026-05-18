@@ -3,20 +3,35 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { useSenecaStore } from "../store/seneca";
 import { apiJson } from "../lib/api";
-import type { SessionRecord } from "@seneca/shared";
+import {
+  normalizeDocuments,
+  normalizeMap,
+  normalizeWeb,
+} from "../lib/sessionNormalizers";
+import type { SessionRecord, SessionUsage } from "@seneca/shared";
+import { DEFAULT_SESSION_USAGE } from "@seneca/shared";
 import { VoicePane } from "./VoicePane/VoicePane";
 import { CanvasContainer } from "./Canvas/CanvasContainer";
-import { ThemeToggle } from "../theme/ThemeToggle";
+import { CostPill } from "./CostPill";
+import { ProfileMenu } from "./Settings/ProfileMenu";
+import { SessionsModal } from "./Sessions/SessionsModal";
 
 export function AppShell() {
-  const { user, signOut, bypass } = useAuth();
+  const { user, bypass } = useAuth();
+  const sessionId = useSenecaStore((s) => s.session.id);
+  const sessionName = useSenecaStore((s) => s.session.name);
   const setSession = useSenecaStore((s) => s.setSession);
   const setTranscript = useSenecaStore((s) => s.setTranscript);
   const setWhiteboard = useSenecaStore((s) => s.setWhiteboard);
+  const setMap = useSenecaStore((s) => s.setMap);
+  const setWeb = useSenecaStore((s) => s.setWeb);
+  const setDocuments = useSenecaStore((s) => s.setDocuments);
+  const setSessionUsage = useSenecaStore((s) => s.setSessionUsage);
   const dockSide = useSenecaStore((s) => s.voice.dockSide);
 
   const [bootError, setBootError] = useState<string | null>(null);
   const [apiOk, setApiOk] = useState<boolean | null>(null);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -32,6 +47,10 @@ export function AppShell() {
         } else {
           setWhiteboard({ elements: [] });
         }
+        setMap(normalizeMap(row.map));
+        setWeb(normalizeWeb(row.web));
+        setDocuments(normalizeDocuments(row.documents));
+        setSessionUsage(normalizeUsage(row.usage));
       } catch (err) {
         if (cancelled) return;
         setBootError(
@@ -44,7 +63,16 @@ export function AppShell() {
     return () => {
       cancelled = true;
     };
-  }, [user, setSession, setTranscript, setWhiteboard]);
+  }, [
+    user,
+    setSession,
+    setTranscript,
+    setWhiteboard,
+    setMap,
+    setWeb,
+    setDocuments,
+    setSessionUsage,
+  ]);
 
   // API health ping for the header status dot.
   useEffect(() => {
@@ -67,8 +95,8 @@ export function AppShell() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b border-border bg-card/70 px-4 py-2 backdrop-blur">
-        <div className="flex items-center gap-3">
+      <header className="relative z-40 flex items-center justify-between border-b border-border bg-card/70 px-4 py-2 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-3">
           <span className="font-serif text-xl tracking-wide text-fg">
             Seneca
           </span>
@@ -81,21 +109,15 @@ export function AppShell() {
               Dev mode
             </span>
           )}
+          <SessionSwitcher
+            sessionName={sessionName}
+            disabled={!sessionId}
+            onClick={() => setSessionsOpen(true)}
+          />
         </div>
-        <div className="flex items-center gap-3 text-xs text-fg-muted">
-          <ThemeToggle />
-          <span>{user?.email}</span>
-          {!bypass && (
-            <button
-              type="button"
-              onClick={() => {
-                void signOut();
-              }}
-              className="btn-ghost h-7 px-2"
-            >
-              Sign out
-            </button>
-          )}
+        <div className="flex items-center gap-3">
+          <CostPill />
+          <ProfileMenu />
         </div>
       </header>
 
@@ -106,15 +128,78 @@ export function AppShell() {
       )}
 
       <div
-        className={`flex h-full min-h-0 flex-1 ${
+        className={`flex h-full min-h-0 flex-1 [isolation:isolate] ${
           dockSide === "right" ? "flex-row-reverse" : "flex-row"
         }`}
       >
         <VoicePane />
-        <CanvasContainer />
+        {/*
+         * Force a full remount of the canvas subtree on session switch.
+         * CanvasContainer + each tab snapshot the initial store state
+         * via useState seeders; without a fresh mount they'd keep the
+         * old session's data. The key cleanly resets every internal
+         * useState as well, so a switch is identical to a fresh boot.
+         */}
+        <CanvasContainer key={sessionId ?? "no-session"} />
       </div>
+
+      <SessionsModal
+        open={sessionsOpen}
+        onClose={() => setSessionsOpen(false)}
+      />
     </div>
   );
+}
+
+interface SessionSwitcherProps {
+  sessionName: string;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+function SessionSwitcher({
+  sessionName,
+  disabled,
+  onClick,
+}: SessionSwitcherProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title="Switch session"
+      className="ml-2 flex max-w-[280px] items-center gap-1.5 truncate rounded-full border border-border bg-surface px-3 py-1 text-xs text-fg-muted transition-colors hover:bg-surface-sunk hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <span aria-hidden className="text-[10px]">
+        ◆
+      </span>
+      <span className="truncate">{sessionName || "Session"}</span>
+      <span aria-hidden className="text-[10px] text-fg-subtle">
+        ▾
+      </span>
+    </button>
+  );
+}
+
+function normalizeUsage(raw: unknown): SessionUsage {
+  if (!raw || typeof raw !== "object") return { ...DEFAULT_SESSION_USAGE };
+  const u = raw as Partial<SessionUsage>;
+  return {
+    inputTokens: numOr(u.inputTokens, 0),
+    outputTokens: numOr(u.outputTokens, 0),
+    cacheReadInputTokens: numOr(u.cacheReadInputTokens, 0),
+    cacheCreationInputTokens: numOr(u.cacheCreationInputTokens, 0),
+    inputCostUSD: numOr(u.inputCostUSD, 0),
+    outputCostUSD: numOr(u.outputCostUSD, 0),
+    updatedAt:
+      typeof u.updatedAt === "string"
+        ? u.updatedAt
+        : DEFAULT_SESSION_USAGE.updatedAt,
+  };
+}
+
+function numOr(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
 
 function ApiStatus({ apiOk }: { apiOk: boolean | null }) {

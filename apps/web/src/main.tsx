@@ -5,13 +5,18 @@ import { App } from "./App";
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element in index.html");
 
-// NOTE: We intentionally don't wrap in <StrictMode>. Excalidraw 0.18 uses
-// useSyncExternalStore internally, and its store fires updates during the
-// effect-cleanup phase that StrictMode's double-mount triggers, which then
-// throws "Maximum update depth exceeded" on every page load. Removing
-// StrictMode is the standard workaround until the upstream fix lands.
-// Reintroduce it for the parts of the tree that don't include Excalidraw
-// once we have time to wrap that subtree separately.
+// NOTE: We intentionally don't wrap the root in <StrictMode>. Excalidraw
+// 0.18 uses `useSyncExternalStore` internally, and its store fires updates
+// during the effect-cleanup phase StrictMode's double-mount triggers,
+// which throws "Maximum update depth exceeded" on every page load.
+//
+// Phase 7 / tech-debt #4 closes the half-fix: StrictMode is applied
+// LOCALLY inside [`apps/web/src/components/Canvas/CanvasContainer.tsx`]
+// around every canvas tab EXCEPT the whiteboard. That gives every other
+// tab subtree (TabBar, MapTab, WebTab, DocumentTab) the
+// effect-cleanup safety checks StrictMode provides, while keeping the
+// Excalidraw subtree on its old, working mount semantics. Re-evaluate
+// when we upgrade Excalidraw past the offending release.
 
 // Surface uncaught errors in the DOM so a blank page is impossible.
 window.addEventListener("error", (e) => {

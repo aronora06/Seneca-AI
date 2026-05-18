@@ -9,10 +9,14 @@ import cors from "cors";
 import express from "express";
 import morgan from "morgan";
 
+import { ALL_TOOLS } from "@seneca/shared";
+
 import { env } from "./env.js";
 import { chatRouter } from "./routes/chat.js";
+import { documentsRouter } from "./routes/documents.js";
 import { healthRouter } from "./routes/health.js";
 import { sessionsRouter } from "./routes/sessions.js";
+import { webRouter } from "./routes/web.js";
 
 const app = express();
 
@@ -30,6 +34,8 @@ app.use(morgan("dev"));
 app.use(healthRouter);
 app.use(chatRouter);
 app.use(sessionsRouter);
+app.use(webRouter);
+app.use(documentsRouter);
 
 // Default error handler — keeps responses uniform.
 app.use(
@@ -49,5 +55,14 @@ app.use(
 app.listen(env.port, () => {
   console.log(
     `[seneca-api] listening on http://localhost:${env.port} (web origin: ${env.webOrigin})`,
+  );
+  // Boot-time banner so a stale process is obvious at a glance. If you
+  // change the tool list and don't see your new names here on the next
+  // `pnpm dev` restart, something is wrong with the rebuild / restart
+  // cycle (almost always: a previous API process is still holding the
+  // port and tsx-watch is stuck in an EADDRINUSE loop).
+  const toolNames = ALL_TOOLS.map((t) => t.name).join(", ");
+  console.log(
+    `[seneca-api] tools loaded (${ALL_TOOLS.length}): ${toolNames}`,
   );
 });

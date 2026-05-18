@@ -43,6 +43,26 @@ export const env = {
   anthropicTextModel: optional("ANTHROPIC_TEXT_MODEL", "claude-sonnet-4-6"),
   anthropicVisionModel: optional("ANTHROPIC_VISION_MODEL", "claude-opus-4-7"),
 
+  /**
+   * Optional. When set, /api/web/search proxies to Tavily. When empty,
+   * the route returns a 503 with a friendly "configure Tavily" message
+   * and the rest of the app keeps working — only `web_search` is gated.
+   */
+  tavilyApiKey: optional("TAVILY_API_KEY", ""),
+
+  /**
+   * Optional. When set, document uploads run a chunk-level embedding pass
+   * via Voyage AI and `document_search` uses cosine similarity for ranking.
+   * When empty, indexing is skipped and `document_search` degrades to the
+   * substring fallback — search still works, just less smartly.
+   *
+   * Anthropic doesn't ship embeddings, so we picked Voyage (their named
+   * partner). `voyage-3-large` is the default model; override with
+   * `VOYAGE_MODEL` if you want to swap to a cheaper / smaller variant.
+   */
+  voyageApiKey: optional("VOYAGE_API_KEY", ""),
+  voyageModel: optional("VOYAGE_MODEL", "voyage-3-large"),
+
   supabaseUrl: devBypassAuth
     ? optional("SUPABASE_URL", "")
     : required("SUPABASE_URL"),
