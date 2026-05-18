@@ -21,6 +21,20 @@ export type FontSize = "sm" | "md" | "lg";
 export type BackgroundStyle = "gradient" | "flat" | "paper" | "grid";
 export type InputModeDefault = "push-to-talk" | "continuous" | "text-only";
 
+/**
+ * Phase A — Vision lock.
+ *
+ * "off"    — the eye starts off for every new session (today's default).
+ * "once"   — the eye is armed for the first message of every new
+ *            session, then auto-reverts after that turn.
+ * "locked" — the eye stays on across every turn of every new session
+ *            until the user explicitly switches it off.
+ *
+ * The user can always flip mid-conversation via the segmented control;
+ * this preference only seeds the initial state on session load.
+ */
+export type VisionDefault = "off" | "once" | "locked";
+
 export interface UserPreferences {
   displayName: string;
   accentId: string;
@@ -31,6 +45,7 @@ export interface UserPreferences {
   ttsPitch: number;
   ttsAutoPlay: boolean;
   inputModeDefault: InputModeDefault;
+  visionDefault: VisionDefault;
   customInstructions: CustomInstructions;
 }
 
@@ -44,6 +59,7 @@ export const DEFAULTS: UserPreferences = {
   ttsPitch: 1.0,
   ttsAutoPlay: true,
   inputModeDefault: "push-to-talk",
+  visionDefault: "off",
   customInstructions: { aboutYou: "", howToRespond: "" },
 };
 
@@ -161,6 +177,12 @@ function merge(raw: Partial<UserPreferences>): UserPreferences {
       raw.inputModeDefault === "text-only"
         ? raw.inputModeDefault
         : DEFAULTS.inputModeDefault,
+    visionDefault:
+      raw.visionDefault === "off" ||
+      raw.visionDefault === "once" ||
+      raw.visionDefault === "locked"
+        ? raw.visionDefault
+        : DEFAULTS.visionDefault,
     customInstructions: {
       aboutYou:
         typeof raw.customInstructions?.aboutYou === "string"

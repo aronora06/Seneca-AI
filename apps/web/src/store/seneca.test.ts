@@ -8,7 +8,12 @@ import type {
   WhiteboardState,
 } from "@seneca/shared";
 
-import { useSenecaStore } from "./seneca";
+import {
+  useSenecaStore,
+  visionModeFor,
+  visionStateForMode,
+} from "./seneca";
+import { DEFAULTS, writePrefs } from "../lib/userPreferences";
 
 const sampleTranscript: TranscriptMessage[] = [
   {
@@ -54,6 +59,9 @@ beforeEach(() => {
     activeTab: "documents",
     tabPulseTarget: "web",
   });
+  // Phase A — reset the persisted vision default to the documented
+  // default so loadSession behaviour is deterministic across tests.
+  writePrefs({ visionDefault: DEFAULTS.visionDefault });
 });
 
 describe("loadSession", () => {
@@ -111,6 +119,99 @@ describe("loadSession", () => {
     expect(state.vision).toEqual({ enabled: false, pinned: false });
     expect(state.activeTab).toBe("whiteboard");
     expect(state.tabPulseTarget).toBeNull();
+  });
+
+  it("honours the persisted vision default — 'once' arms the eye", () => {
+    writePrefs({ visionDefault: "once" });
+    useSenecaStore.getState().loadSession({
+      id: "sess-4",
+      name: "Once-default",
+      transcript: [],
+      whiteboard: sampleWhiteboard,
+      map: sampleMap,
+      web: sampleWeb,
+      documents: sampleDocuments,
+    });
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: true,
+      pinned: false,
+    });
+  });
+
+  it("honours the persisted vision default — 'locked' pins the eye", () => {
+    writePrefs({ visionDefault: "locked" });
+    useSenecaStore.getState().loadSession({
+      id: "sess-5",
+      name: "Locked-default",
+      transcript: [],
+      whiteboard: sampleWhiteboard,
+      map: sampleMap,
+      web: sampleWeb,
+      documents: sampleDocuments,
+    });
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: true,
+      pinned: true,
+    });
+  });
+});
+
+describe("setVisionMode", () => {
+  it("off → once → locked → off transitions cycle the underlying state", () => {
+    useSenecaStore.setState({ vision: { enabled: false, pinned: false } });
+    const { setVisionMode } = useSenecaStore.getState();
+
+    setVisionMode("once");
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: true,
+      pinned: false,
+    });
+
+    setVisionMode("locked");
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: true,
+      pinned: true,
+    });
+
+    setVisionMode("off");
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: false,
+      pinned: false,
+    });
+  });
+
+  it("locked → once unpins without turning vision off", () => {
+    useSenecaStore.setState({ vision: { enabled: true, pinned: true } });
+    useSenecaStore.getState().setVisionMode("once");
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: true,
+      pinned: false,
+    });
+  });
+
+  it("off → locked enables and pins atomically (no intermediate state)", () => {
+    useSenecaStore.setState({ vision: { enabled: false, pinned: false } });
+    useSenecaStore.getState().setVisionMode("locked");
+    expect(useSenecaStore.getState().vision).toEqual({
+      enabled: true,
+      pinned: true,
+    });
+  });
+});
+
+describe("visionStateForMode / visionModeFor", () => {
+  it("round-trips every mode through the helpers", () => {
+    for (const mode of ["off", "once", "locked"] as const) {
+      const state = visionStateForMode(mode);
+      expect(visionModeFor(state)).toBe(mode);
+    }
+  });
+
+  it("treats pinned as locked even when enabled is somehow false", () => {
+    // This shape shouldn't occur via setVisionMode but the helper still
+    // has to be deterministic: pinned wins because that is the user's
+    // explicit "keep it on" intent.
+    expect(visionModeFor({ enabled: false, pinned: true })).toBe("locked");
   });
 });
 

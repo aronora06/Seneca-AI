@@ -21,6 +21,8 @@ import type {
 } from "@seneca/shared";
 import { DEFAULT_SESSION_USAGE } from "@seneca/shared";
 
+import { readPrefs, type VisionDefault } from "../lib/userPreferences";
+
 export type DockSide = "left" | "right";
 export type VoiceMode = "idle" | "listening" | "speaking";
 export type ActiveTab = "whiteboard" | "documents" | "web" | "map";
@@ -38,6 +40,46 @@ interface VoicePaneState {
 interface VisionState {
   enabled: boolean;
   pinned: boolean;
+}
+
+/**
+ * Phase A — Vision lock.
+ *
+ * The three states the segmented control exposes to the user. The
+ * underlying `vision: { enabled, pinned }` shape is preserved because
+ * the capture pipeline (`runTurn.ts`) and the auto-revert logic at turn
+ * end read those fields directly; `VisionMode` is a UI-facing alias
+ * with crisp semantics:
+ *
+ *  - "off"    — `enabled: false, pinned: false`
+ *  - "once"   — `enabled: true,  pinned: false`  (auto-reverts to off
+ *               after one turn — see runTurn.ts)
+ *  - "locked" — `enabled: true,  pinned: true`   (stays on across turns)
+ */
+export type VisionMode = "off" | "once" | "locked";
+
+export function visionStateForMode(mode: VisionMode): VisionState {
+  switch (mode) {
+    case "off":
+      return { enabled: false, pinned: false };
+    case "once":
+      return { enabled: true, pinned: false };
+    case "locked":
+      return { enabled: true, pinned: true };
+  }
+}
+
+export function visionModeFor(state: {
+  enabled: boolean;
+  pinned: boolean;
+}): VisionMode {
+  if (state.pinned) return "locked";
+  if (state.enabled) return "once";
+  return "off";
+}
+
+function visionStateForDefault(def: VisionDefault): VisionState {
+  return visionStateForMode(def);
 }
 
 interface StreamingState {
@@ -100,6 +142,8 @@ interface SenecaState {
   toggleVisionArmed: () => void;
   toggleVisionPinned: () => void;
   setVisionEnabled: (enabled: boolean, opts?: { pinned?: boolean }) => void;
+  /** Phase A — set the vision mode directly (segmented control). */
+  setVisionMode: (mode: VisionMode) => void;
 
   // ── transcript
   setTranscript: (transcript: TranscriptMessage[]) => void;
@@ -198,6 +242,20 @@ function writeContinuous(on: boolean): void {
   }
 }
 
+/**
+ * Read the user's persisted "vision default" preference. Safe at module
+ * load (no DOM dependency beyond what `readPrefs()` already guards) and
+ * always returns a valid VisionDefault — falling back to "off" if the
+ * preferences blob is unreadable.
+ */
+function readVisionDefault(): VisionDefault {
+  try {
+    return readPrefs().visionDefault;
+  } catch {
+    return "off";
+  }
+}
+
 export const useSenecaStore = create<SenecaState>((set, get) => ({
   session: { id: null, name: "" },
   transcript: [],
@@ -209,7 +267,10 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
     continuousListening: readContinuous(),
     interimSpeech: "",
   },
-  vision: { enabled: false, pinned: false },
+  // Phase A — boot the vision toggle from the user's persisted default
+  // so the first session of the day already reflects their preference.
+  // `loadSession` re-applies the same logic on every session switch.
+  vision: visionStateForDefault(readVisionDefault()),
   activeTab: "whiteboard",
   tabPulseTarget: null,
   whiteboard: null,
@@ -257,6 +318,7 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
         pinned: opts?.pinned ?? s.vision.pinned,
       },
     })),
+  setVisionMode: (mode) => set({ vision: visionStateForMode(mode) }),
 
   setTranscript: (transcript) => set({ transcript }),
   appendTranscript: (msg) =>
@@ -304,7 +366,9 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
         pendingActionLog: [],
       },
       pendingToolResults: [],
-      vision: { enabled: false, pinned: false },
+      // Phase A — seed the vision toggle from the user's persisted
+      // default so power users don't have to flip the eye every session.
+      vision: visionStateForDefault(readVisionDefault()),
       activeTab: "whiteboard",
       tabPulseTarget: null,
       sessionUsage: { ...DEFAULT_SESSION_USAGE },

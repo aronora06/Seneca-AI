@@ -46,3 +46,10 @@ if (typeof globalThis.localStorage === "undefined") {
     },
   };
 }
+
+// React 18's `act` helper expects this global to be set in any
+// non-React-Native test environment. Without it, every render via
+// `react-dom/client` logs "The current testing environment is not
+// configured to support act(...)" — harmless but noisy.
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+  true;

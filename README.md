@@ -32,7 +32,7 @@ Every MVP slice in vision §7 has shipped, plus the document-intelligence depth 
 
 ### Vision
 
-- **Vision toggle** (👁) — when armed, Seneca sees a downscaled PNG of the active canvas tab with your next message. Pin it on with shift-click.
+- **Vision toggle** — a three-state segmented control (Off / Once / Locked). "Once" sends a downscaled PNG of the active canvas tab with your next message, then reverts. "Locked" keeps vision live across every message until you switch it off. The active canvas tab shows an inline badge whenever vision is on so you always know whether Seneca will see you. The default state for new sessions is picked in Settings → Appearance → Vision default.
 - **Multi-step tool use** via a server-side agent loop — Seneca can chain `whiteboard_clear` + many `whiteboard_add_element` calls in a single turn and you'll see them appear in sequence.
 - **Tool chips** below Seneca's messages show every tool he called, with a status dot and an expandable JSON detail view. Phase 3 made these persist server-side, so a reload preserves them.
 - **Cross-turn `tool_result` round-trip** — real failure strings reach Seneca on the next turn (see [docs/actions.md](docs/actions.md)).

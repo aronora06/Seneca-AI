@@ -1,4 +1,5 @@
 import { useState } from "react";
+import clsx from "clsx";
 
 import { useTheme, type ThemeChoice } from "../../../theme/ThemeProvider";
 import { ACCENT_PRESETS } from "../../../theme/accents";
@@ -7,6 +8,7 @@ import {
   writePrefs,
   type BackgroundStyle,
   type FontSize,
+  type VisionDefault,
 } from "../../../lib/userPreferences";
 import { PanelIntro, Section } from "./_shared";
 import {
@@ -35,6 +37,12 @@ const BG_OPTIONS: Array<{ value: BackgroundStyle; label: string; desc: string }>
   { value: "grid",     label: "Grid",     desc: "Dot grid pattern" },
 ];
 
+const VISION_DEFAULT_OPTIONS: Array<{ value: VisionDefault; label: string }> = [
+  { value: "off",    label: "Off"     },
+  { value: "once",   label: "Once"    },
+  { value: "locked", label: "Locked"  },
+];
+
 export function AppearancePanel() {
   const {
     choice,
@@ -48,12 +56,20 @@ export function AppearancePanel() {
   const [bgStyle, setBgStyle] = useState<BackgroundStyle>(
     () => readPrefs().backgroundStyle,
   );
+  const [visionDefault, setVisionDefault] = useState<VisionDefault>(
+    () => readPrefs().visionDefault,
+  );
 
   const handleBgChange = (style: BackgroundStyle) => {
     setBgStyle(style);
     writePrefs({ backgroundStyle: style });
     if (style === "gradient") document.body.removeAttribute("data-bg");
     else document.body.setAttribute("data-bg", style);
+  };
+
+  const handleVisionDefaultChange = (value: VisionDefault) => {
+    setVisionDefault(value);
+    writePrefs({ visionDefault: value });
   };
 
   return (
@@ -121,6 +137,38 @@ export function AppearancePanel() {
               onClick={() => handleBgChange(opt.value)}
             />
           ))}
+        </div>
+      </Section>
+
+      <Section
+        label="Vision default"
+        hint="Where the eye-icon segmented control starts when you open a new session. You can still change it mid-conversation."
+      >
+        <div
+          role="radiogroup"
+          aria-label="Vision default"
+          className="flex gap-1 rounded-lg border border-border bg-surface-sunk/50 p-1"
+        >
+          {VISION_DEFAULT_OPTIONS.map((opt) => {
+            const active = visionDefault === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => handleVisionDefaultChange(opt.value)}
+                className={clsx(
+                  "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-card text-fg shadow-sm"
+                    : "text-fg-muted hover:text-fg",
+                )}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
         </div>
       </Section>
     </>
