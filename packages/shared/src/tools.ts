@@ -46,7 +46,7 @@ export const WHITEBOARD_ADD_ELEMENT: ToolDefinition = {
       width: {
         type: "number",
         description:
-          "Width in pixels for rectangle and ellipse. Defaults to 120 when omitted.",
+          "Width in pixels. For text: box width for wrapping (auto-estimated when omitted). For rectangle/ellipse: defaults to 120.",
       },
       height: {
         type: "number",
@@ -66,7 +66,8 @@ export const WHITEBOARD_ADD_ELEMENT: ToolDefinition = {
       },
       strokeColor: {
         type: "string",
-        description: "Optional stroke color, e.g. '#1e1e1e' or '#c92a2a'.",
+        description:
+          "Optional stroke/text color (hex). Omit to use the contrast-safe default from <workspace_context>. On light boards use dark strokes (~#1e1e1e); on dark boards use light strokes (~#e8e8e8). Never use light gray or white on a light board.",
       },
       fontSize: {
         type: "number",
@@ -85,6 +86,140 @@ export const WHITEBOARD_CLEAR: ToolDefinition = {
   input_schema: {
     type: "object",
     properties: {},
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_LOAD: ToolDefinition = {
+  name: "diagram_load",
+  description:
+    "Replace the shared diagrams canvas with a new diagram. Use format 'mermaid' for flowcharts and sequence diagrams (pass Mermaid source). Use format 'xml' for precise boxes and connectors (uncompressed mxGraphModel XML with structural cells id=\"0\" and id=\"1\"). Prefer mermaid for quick drafts; use xml when you need exact placement. Client tool_result includes diff, warnings, and bounds.",
+  input_schema: {
+    type: "object",
+    properties: {
+      format: {
+        type: "string",
+        enum: ["xml", "mermaid"],
+        description: "How to interpret the data field.",
+      },
+      data: {
+        type: "string",
+        description: "Mermaid source or draw.io mxGraphModel XML.",
+      },
+    },
+    required: ["format", "data"],
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_MERGE: ToolDefinition = {
+  name: "diagram_merge",
+  description:
+    "Merge additional draw.io XML into the current diagram without clearing user edits. Pass uncompressed mxGraphModel XML (or mxCell fragments); structural cells id=\"0\" and id=\"1\" are required. Use for incremental additions — extra shapes, labels, or connectors.",
+  input_schema: {
+    type: "object",
+    properties: {
+      xml: {
+        type: "string",
+        description: "mxGraphModel XML to merge into the live diagram.",
+      },
+    },
+    required: ["xml"],
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_CLEAR: ToolDefinition = {
+  name: "diagram_clear",
+  description:
+    "Clear the diagrams canvas to a blank structured diagram. Use only when the existing diagram would mislead the next topic.",
+  input_schema: {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_READ: ToolDefinition = {
+  name: "diagram_read",
+  description:
+    "Read the persisted diagram as structured vertices, edges, bounds, and optional Mermaid (preferred mental model for edits). Server-fulfilled from last-saved session XML; use workspace_context for live unsaved edits. Call before precise edits when vision is off.",
+  input_schema: {
+    type: "object",
+    properties: {
+      includeMermaid: {
+        type: "boolean",
+        description:
+          "When true (default), include a Mermaid flowchart when the graph is small enough.",
+      },
+    },
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_SET_LABEL: ToolDefinition = {
+  name: "diagram_set_label",
+  description:
+    "Change the label text on a single diagram cell by id. Prefer after diagram_read when you need exact ids.",
+  input_schema: {
+    type: "object",
+    properties: {
+      cellId: { type: "string", description: "mxCell id (not 0 or 1)." },
+      text: { type: "string", description: "New label text." },
+    },
+    required: ["cellId", "text"],
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_REMOVE_CELLS: ToolDefinition = {
+  name: "diagram_remove_cells",
+  description:
+    "Remove one or more cells by id. Structural cells 0 and 1 are never removed.",
+  input_schema: {
+    type: "object",
+    properties: {
+      cellIds: {
+        type: "array",
+        items: { type: "string" },
+        description: "mxCell ids to delete.",
+      },
+    },
+    required: ["cellIds"],
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_ADD_NODES: ToolDefinition = {
+  name: "diagram_add_nodes",
+  description:
+    "Add shapes or connectors by merging a small mxGraphModel fragment (must include structural cells id=\"0\" and id=\"1\"). Safer than diagram_load when extending an existing diagram.",
+  input_schema: {
+    type: "object",
+    properties: {
+      xml: {
+        type: "string",
+        description: "Partial or full mxGraphModel XML to merge.",
+      },
+    },
+    required: ["xml"],
+    additionalProperties: false,
+  },
+};
+
+export const DIAGRAM_LAYOUT: ToolDefinition = {
+  name: "diagram_layout",
+  description:
+    "Auto-layout the current diagram (verticalFlow, horizontalFlow, or organic). Returns diff and warnings in tool_result.",
+  input_schema: {
+    type: "object",
+    properties: {
+      algorithm: {
+        type: "string",
+        enum: ["horizontalFlow", "verticalFlow", "organic"],
+        description: "Layout algorithm; defaults to verticalFlow.",
+      },
+    },
     additionalProperties: false,
   },
 };
@@ -379,6 +514,14 @@ export const DOCUMENT_READ_PAGE: ToolDefinition = {
 export const ALL_TOOLS: ToolDefinition[] = [
   WHITEBOARD_ADD_ELEMENT,
   WHITEBOARD_CLEAR,
+  DIAGRAM_LOAD,
+  DIAGRAM_MERGE,
+  DIAGRAM_CLEAR,
+  DIAGRAM_READ,
+  DIAGRAM_SET_LABEL,
+  DIAGRAM_REMOVE_CELLS,
+  DIAGRAM_ADD_NODES,
+  DIAGRAM_LAYOUT,
   MAP_FLY_TO,
   MAP_DROP_PIN,
   MAP_DRAW_SHAPE,
@@ -512,9 +655,45 @@ export interface DocumentSearchHit {
   score: number;
 }
 
+export interface DiagramLoadInput {
+  format: "xml" | "mermaid";
+  data: string;
+}
+
+export interface DiagramMergeInput {
+  xml: string;
+}
+
+export interface DiagramReadInput {
+  includeMermaid?: boolean;
+}
+
+export interface DiagramSetLabelInput {
+  cellId: string;
+  text: string;
+}
+
+export interface DiagramRemoveCellsInput {
+  cellIds: string[];
+}
+
+export type DiagramAddNodesInput = DiagramMergeInput;
+
+export interface DiagramLayoutInput {
+  algorithm?: "horizontalFlow" | "verticalFlow" | "organic";
+}
+
 export type ToolName =
   | "whiteboard_add_element"
   | "whiteboard_clear"
+  | "diagram_load"
+  | "diagram_merge"
+  | "diagram_clear"
+  | "diagram_read"
+  | "diagram_set_label"
+  | "diagram_remove_cells"
+  | "diagram_add_nodes"
+  | "diagram_layout"
   | "map_fly_to"
   | "map_drop_pin"
   | "map_draw_shape"

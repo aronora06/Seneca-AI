@@ -38,6 +38,7 @@ import {
 } from "../lib/elevenLabsTTS.js";
 import { env } from "../env.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
+import { rateLimit } from "../middleware/rateLimit.js";
 import { sessionStore } from "../lib/sessionStore.js";
 
 export const ttsRouter = Router();
@@ -55,7 +56,11 @@ ttsRouter.get("/api/tts/config", (_req, res) => {
   });
 });
 
-ttsRouter.post("/api/tts", requireAuth, async (req: AuthedRequest, res) => {
+ttsRouter.post(
+  "/api/tts",
+  requireAuth,
+  rateLimit("tts"),
+  async (req: AuthedRequest, res) => {
   const body = req.body as
     | { text?: unknown; voiceId?: unknown; sessionId?: unknown }
     | undefined;
@@ -135,7 +140,8 @@ ttsRouter.post("/api/tts", requireAuth, async (req: AuthedRequest, res) => {
     const message = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: message, kind: "upstream_failed" });
   }
-});
+},
+);
 
 async function pumpStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -147,10 +153,12 @@ async function pumpStream(
       const { value, done } = await reader.read();
       if (done) break;
       if (!value) continue;
-      // res.write may return false (backpressure); we don't await drain
-      // because audio is small and chunky. If we observe issues we can
-      // add proper backpressure here.
-      res.write(value);
+      const ok = res.write(value);
+      if (!ok && !isCancelled()) {
+        await new Promise<void>((resolve) => {
+          res.once("drain", resolve);
+        });
+      }
     }
   } catch {
     // Connection closed mid-stream; just stop.

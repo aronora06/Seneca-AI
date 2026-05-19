@@ -1,46 +1,55 @@
-import { useState } from "react";
 import clsx from "clsx";
 
 import { useTheme, type ThemeChoice } from "../../../theme/ThemeProvider";
-import { ACCENT_PRESETS } from "../../../theme/accents";
 import {
-  readPrefs,
+  COLOR_PALETTES,
+  type PaletteCategory,
+} from "../../../theme/palettes";
+import {
+  usePrefs,
   writePrefs,
   type BackgroundStyle,
   type FontSize,
   type VisionDefault,
 } from "../../../lib/userPreferences";
+import { useSenecaStore } from "../../../store/seneca";
 import { PanelIntro, Section } from "./_shared";
+import { PaletteCustomize } from "./PaletteCustomize";
 import {
-  AccentPreviewCard,
   BackgroundPreviewCard,
   FontSizePreviewCard,
+  PalettePreviewCard,
   ThemePreviewCard,
 } from "./AppearancePreviews";
 
 const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: string }> = [
-  { value: "light",  label: "Light",  glyph: "☼" },
+  { value: "light", label: "Light", glyph: "☼" },
   { value: "system", label: "System", glyph: "◐" },
-  { value: "dark",   label: "Dark",   glyph: "☾" },
+  { value: "dark", label: "Dark", glyph: "☾" },
 ];
 
 const FONT_OPTIONS: Array<{ value: FontSize; label: string }> = [
-  { value: "sm", label: "Small"   },
+  { value: "sm", label: "Small" },
   { value: "md", label: "Default" },
-  { value: "lg", label: "Large"   },
+  { value: "lg", label: "Large" },
 ];
 
 const BG_OPTIONS: Array<{ value: BackgroundStyle; label: string; desc: string }> = [
   { value: "gradient", label: "Gradient", desc: "Subtle warm glow" },
-  { value: "flat",     label: "Flat",     desc: "Solid background" },
-  { value: "paper",    label: "Paper",    desc: "Subtle texture"   },
-  { value: "grid",     label: "Grid",     desc: "Dot grid pattern" },
+  { value: "flat", label: "Flat", desc: "Solid background" },
+  { value: "paper", label: "Paper", desc: "Subtle texture" },
+  { value: "grid", label: "Grid", desc: "Dot grid pattern" },
 ];
 
 const VISION_DEFAULT_OPTIONS: Array<{ value: VisionDefault; label: string }> = [
-  { value: "off",    label: "Off"     },
-  { value: "once",   label: "Once"    },
-  { value: "locked", label: "Locked"  },
+  { value: "off", label: "Off" },
+  { value: "once", label: "Once" },
+  { value: "locked", label: "Locked" },
+];
+
+const PALETTE_GROUPS: Array<{ category: PaletteCategory; title: string }> = [
+  { category: "professional", title: "Professional" },
+  { category: "expressive", title: "Expressive" },
 ];
 
 export function AppearancePanel() {
@@ -48,39 +57,31 @@ export function AppearancePanel() {
     choice,
     setChoice,
     resolved,
-    accentId,
-    setAccentId,
+    paletteId,
+    setPaletteId,
     fontSize,
     setFontSize,
+    backgroundStyle,
+    setBackgroundStyle,
   } = useTheme();
-  const [bgStyle, setBgStyle] = useState<BackgroundStyle>(
-    () => readPrefs().backgroundStyle,
-  );
-  const [visionDefault, setVisionDefault] = useState<VisionDefault>(
-    () => readPrefs().visionDefault,
-  );
 
-  const handleBgChange = (style: BackgroundStyle) => {
-    setBgStyle(style);
-    writePrefs({ backgroundStyle: style });
-    if (style === "gradient") document.body.removeAttribute("data-bg");
-    else document.body.setAttribute("data-bg", style);
-  };
+  const { visionDefault } = usePrefs();
+  const applyVisionDefault = useSenecaStore((s) => s.applyVisionDefault);
 
   const handleVisionDefaultChange = (value: VisionDefault) => {
-    setVisionDefault(value);
     writePrefs({ visionDefault: value });
+    applyVisionDefault(value);
   };
 
   return (
     <>
       <PanelIntro
-        description="Make Seneca feel like yours. Each option below is a live preview of the change."
+        description="Make Seneca feel like yours. Light and dark set brightness; colour palettes shape the whole interface."
         autoSaves
       />
 
-      <Section label="Theme">
-        <div role="radiogroup" className="grid grid-cols-3 gap-2">
+      <Section label="Brightness" hint="Quick light, dark, or follow your system.">
+        <div role="radiogroup" aria-label="Brightness" className="grid grid-cols-3 gap-2">
           {THEME_OPTIONS.map((opt) => (
             <ThemePreviewCard
               key={opt.value}
@@ -94,25 +95,34 @@ export function AppearancePanel() {
         </div>
       </Section>
 
-      <Section
-        label="Accent colour"
-        hint="Used for highlights, focus rings, and primary actions."
-      >
-        <div role="radiogroup" className="grid grid-cols-3 gap-2 sm:grid-cols-6">
-          {ACCENT_PRESETS.map((preset) => (
-            <AccentPreviewCard
-              key={preset.id}
-              preset={preset}
-              resolved={resolved}
-              active={accentId === preset.id}
-              onClick={() => setAccentId(preset.id)}
-            />
-          ))}
-        </div>
+      {PALETTE_GROUPS.map(({ category, title }) => (
+        <Section key={category} label={`${title} palettes`}>
+          <div
+            role="radiogroup"
+            aria-label={`${title} colour palettes`}
+            className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+          >
+            {COLOR_PALETTES.filter((p) => p.category === category).map(
+              (palette) => (
+                <PalettePreviewCard
+                  key={palette.id}
+                  palette={palette}
+                  resolved={resolved}
+                  active={paletteId === palette.id}
+                  onClick={() => setPaletteId(palette.id)}
+                />
+              ),
+            )}
+          </div>
+        </Section>
+      ))}
+
+      <Section label="Customize">
+        <PaletteCustomize />
       </Section>
 
       <Section label="Font size">
-        <div role="radiogroup" className="grid grid-cols-3 gap-2">
+        <div role="radiogroup" aria-label="Font size" className="grid grid-cols-3 gap-2">
           {FONT_OPTIONS.map((opt) => (
             <FontSizePreviewCard
               key={opt.value}
@@ -125,16 +135,19 @@ export function AppearancePanel() {
         </div>
       </Section>
 
-      <Section label="Background">
-        <div role="radiogroup" className="grid grid-cols-2 gap-2">
+      <Section
+        label="Background texture"
+        hint="Visible behind translucent panels — close settings to preview on the main workspace."
+      >
+        <div role="radiogroup" aria-label="Background texture" className="grid grid-cols-2 gap-2">
           {BG_OPTIONS.map((opt) => (
             <BackgroundPreviewCard
               key={opt.value}
               value={opt.value}
               label={opt.label}
               desc={opt.desc}
-              active={bgStyle === opt.value}
-              onClick={() => handleBgChange(opt.value)}
+              active={backgroundStyle === opt.value}
+              onClick={() => setBackgroundStyle(opt.value)}
             />
           ))}
         </div>
@@ -142,7 +155,7 @@ export function AppearancePanel() {
 
       <Section
         label="Vision default"
-        hint="Where the eye-icon segmented control starts when you open a new session. You can still change it mid-conversation."
+        hint="Sets the eye control now and seeds new sessions. You can still change it mid-conversation."
       >
         <div
           role="radiogroup"

@@ -9,10 +9,13 @@
  * The hook mirrors the shape of `useSpeechSynthesis` so the rest of
  * the UI doesn't care which engine is producing audio.
  *
- * The TTS-config probe runs once per browser session and is cached on
- * the module so re-mounts don't refire the request. The cache is keyed
- * on the API origin so an env-var change in dev still picks up on the
- * next reload.
+ * The TTS-config probe is deduped via a module-level promise so
+ * concurrent mounts don't refire the request. We deliberately do
+ * NOT persist the result across reloads — a sticky cache used to
+ * mean that adding an `ELEVENLABS_API_KEY` to `.env` after the tab
+ * was already open required closing the tab to pick up. Every
+ * full reload now re-probes the API once. The endpoint is a
+ * sub-millisecond static read on the server, so the trade is cheap.
  */
 import { useEffect, useState } from "react";
 
@@ -38,43 +41,18 @@ export interface CuratedVoice {
   description: string;
 }
 
-const CONFIG_CACHE_KEY = "seneca:tts-config";
-
 let configPromise: Promise<SpeechProviderInfo> | null = null;
 
 export function fetchTtsConfig(force = false): Promise<SpeechProviderInfo> {
-  if (force) {
-    configPromise = null;
-    try {
-      sessionStorage.removeItem(CONFIG_CACHE_KEY);
-    } catch {
-      // ignore
-    }
-  }
+  if (force) configPromise = null;
   if (configPromise) return configPromise;
   configPromise = (async () => {
-    // Quick sessionStorage cache so subsequent reloads in the same
-    // browser tab don't refire the request.
-    try {
-      const cached = sessionStorage.getItem(CONFIG_CACHE_KEY);
-      if (cached) {
-        return JSON.parse(cached) as SpeechProviderInfo;
-      }
-    } catch {
-      // ignore
-    }
     try {
       const res = await fetch(`${API_BASE}/api/tts/config`, {
         method: "GET",
       });
       if (!res.ok) throw new Error(`tts/config ${res.status}`);
-      const info = (await res.json()) as SpeechProviderInfo;
-      try {
-        sessionStorage.setItem(CONFIG_CACHE_KEY, JSON.stringify(info));
-      } catch {
-        // ignore
-      }
-      return info;
+      return (await res.json()) as SpeechProviderInfo;
     } catch {
       const offline: SpeechProviderInfo = {
         available: false,
@@ -91,6 +69,8 @@ export function fetchTtsConfig(force = false): Promise<SpeechProviderInfo> {
 export interface SpeechHook {
   supported: boolean;
   speaking: boolean;
+  /** Queued / fetching / playing — use for activity visuals and echo gate. */
+  audioActive: boolean;
   paused: boolean;
   muted: boolean;
   /** Which engine is actually producing audio right now. */
@@ -155,6 +135,7 @@ export function useSpeech(opts: Options = {}): SpeechHook {
   return {
     supported: active.supported,
     speaking: active.speaking,
+    audioActive: active.audioActive,
     paused: active.paused,
     muted: active.muted,
     engine,

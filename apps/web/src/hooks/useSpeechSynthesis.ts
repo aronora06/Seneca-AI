@@ -19,6 +19,8 @@ import { readPrefs } from "../lib/userPreferences";
 export interface SpeechSynthesisHook {
   supported: boolean;
   speaking: boolean;
+  /** Mirrors `speaking` for browser TTS (no separate fetch queue). */
+  audioActive: boolean;
   paused: boolean;
   muted: boolean;
   setMuted: (m: boolean) => void;
@@ -57,6 +59,7 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
     typeof window !== "undefined" && "speechSynthesis" in window;
 
   const [speaking, setSpeaking] = useState(false);
+  const [audioActive, setAudioActive] = useState(false);
   const [paused, setPaused] = useState(false);
   const [muted, setMutedState] = useState(false);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
@@ -88,15 +91,21 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
       }
       utter.rate = prefs.ttsRate;
       utter.pitch = prefs.ttsPitch;
+      setAudioActive(true);
       utter.onstart = () => {
         setSpeaking(true);
+        setAudioActive(true);
         setPaused(false);
       };
       utter.onend = () => {
-        setSpeaking(window.speechSynthesis.speaking);
+        const busy = window.speechSynthesis.speaking;
+        setSpeaking(busy);
+        setAudioActive(busy);
       };
       utter.onerror = () => {
-        setSpeaking(window.speechSynthesis.speaking);
+        const busy = window.speechSynthesis.speaking;
+        setSpeaking(busy);
+        setAudioActive(busy);
       };
       window.speechSynthesis.speak(utter);
     },
@@ -119,6 +128,7 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
     if (!supported) return;
     window.speechSynthesis.cancel();
     setSpeaking(false);
+    setAudioActive(false);
     setPaused(false);
   }, [supported]);
 
@@ -126,6 +136,7 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
     if (!supported) return;
     window.speechSynthesis.cancel();
     setSpeaking(false);
+    setAudioActive(false);
     setPaused(false);
   }, [supported]);
 
@@ -140,7 +151,9 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
   useEffect(() => {
     if (!supported) return;
     const i = window.setInterval(() => {
-      setSpeaking(window.speechSynthesis.speaking);
+      const busy = window.speechSynthesis.speaking;
+      setSpeaking(busy);
+      setAudioActive(busy);
       setPaused(window.speechSynthesis.paused);
     }, 500);
     return () => window.clearInterval(i);
@@ -149,6 +162,7 @@ export function useSpeechSynthesis(): SpeechSynthesisHook {
   return {
     supported,
     speaking,
+    audioActive,
     paused,
     muted,
     setMuted,

@@ -9,12 +9,15 @@ import {
   normalizeWeb,
 } from "../lib/sessionNormalizers";
 import type { SessionRecord, SessionUsage } from "@seneca/shared";
-import { DEFAULT_SESSION_USAGE } from "@seneca/shared";
+import { DEFAULT_DIAGRAMS_STATE, DEFAULT_SESSION_USAGE } from "@seneca/shared";
 import { VoicePane } from "./VoicePane/VoicePane";
 import { CanvasContainer } from "./Canvas/CanvasContainer";
 import { CostPill } from "./CostPill";
+import { VoiceStatusPill } from "./VoiceStatusPill";
+import { OnboardingHint } from "./Onboarding/OnboardingHint";
 import { ProfileMenu } from "./Settings/ProfileMenu";
 import { SessionsModal } from "./Sessions/SessionsModal";
+import { WorkspaceBackdrop } from "../theme/WorkspaceBackdrop";
 
 export function AppShell() {
   const { user, bypass } = useAuth();
@@ -23,6 +26,7 @@ export function AppShell() {
   const setSession = useSenecaStore((s) => s.setSession);
   const setTranscript = useSenecaStore((s) => s.setTranscript);
   const setWhiteboard = useSenecaStore((s) => s.setWhiteboard);
+  const setDiagrams = useSenecaStore((s) => s.setDiagrams);
   const setMap = useSenecaStore((s) => s.setMap);
   const setWeb = useSenecaStore((s) => s.setWeb);
   const setDocuments = useSenecaStore((s) => s.setDocuments);
@@ -47,6 +51,9 @@ export function AppShell() {
         } else {
           setWhiteboard({ elements: [] });
         }
+        setDiagrams(
+          row.diagrams?.xml ? row.diagrams : { ...DEFAULT_DIAGRAMS_STATE },
+        );
         setMap(normalizeMap(row.map));
         setWeb(normalizeWeb(row.web));
         setDocuments(normalizeDocuments(row.documents));
@@ -68,6 +75,7 @@ export function AppShell() {
     setSession,
     setTranscript,
     setWhiteboard,
+    setDiagrams,
     setMap,
     setWeb,
     setDocuments,
@@ -116,6 +124,7 @@ export function AppShell() {
           />
         </div>
         <div className="flex items-center gap-3">
+          <VoiceStatusPill />
           <CostPill />
           <ProfileMenu />
         </div>
@@ -127,26 +136,31 @@ export function AppShell() {
         </div>
       )}
 
-      <div
-        className={`flex h-full min-h-0 flex-1 [isolation:isolate] ${
-          dockSide === "right" ? "flex-row-reverse" : "flex-row"
-        }`}
-      >
-        <VoicePane />
-        {/*
-         * Force a full remount of the canvas subtree on session switch.
-         * CanvasContainer + each tab snapshot the initial store state
-         * via useState seeders; without a fresh mount they'd keep the
-         * old session's data. The key cleanly resets every internal
-         * useState as well, so a switch is identical to a fresh boot.
-         */}
-        <CanvasContainer key={sessionId ?? "no-session"} />
+      <div className="relative flex h-full min-h-0 flex-1">
+        <WorkspaceBackdrop />
+        <div
+          className={`relative z-10 flex h-full min-h-0 w-full flex-1 ${
+            dockSide === "right" ? "flex-row-reverse" : "flex-row"
+          }`}
+        >
+          <VoicePane />
+          {/*
+           * Canvas stage — floating voice controls portal here when the
+           * chat pane is collapsed so they stay over the content area.
+           * Force a full remount of the canvas subtree on session switch.
+           */}
+          <div id="workspace-stage" className="relative min-h-0 min-w-0 flex-1">
+            <CanvasContainer key={sessionId ?? "no-session"} />
+          </div>
+        </div>
       </div>
 
       <SessionsModal
         open={sessionsOpen}
         onClose={() => setSessionsOpen(false)}
       />
+
+      <OnboardingHint />
     </div>
   );
 }
@@ -168,6 +182,7 @@ function SessionSwitcher({
       onClick={onClick}
       disabled={disabled}
       title="Switch session"
+      aria-label={`Switch session (current: ${sessionName || "Session"})`}
       className="ml-2 flex max-w-[280px] items-center gap-1.5 truncate rounded-full border border-border bg-surface px-3 py-1 text-xs text-fg-muted transition-colors hover:bg-surface-sunk hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
     >
       <span aria-hidden className="text-[10px]">
@@ -217,8 +232,10 @@ function ApiStatus({ apiOk }: { apiOk: boolean | null }) {
     <span
       className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle"
       title={label}
+      role="status"
+      aria-live="polite"
     >
-      <span className={`h-2 w-2 rounded-full ${colour}`} />
+      <span aria-hidden className={`h-2 w-2 rounded-full ${colour}`} />
       {label}
     </span>
   );

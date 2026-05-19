@@ -77,6 +77,14 @@ function Bubble({ message }: { message: import("@seneca/shared").TranscriptMessa
           <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-fg-subtle">
             <span>Seneca</span>
             {message.hadVision && <span title="Seneca saw the canvas">· 👁</span>}
+            {message.interrupted && (
+              <span
+                title="You interrupted Seneca here — he never finished saying this aloud."
+                className="text-accent"
+              >
+                · interrupted
+              </span>
+            )}
           </div>
         )}
         <div className={isUser ? "font-sans" : "font-serif text-[15px]"}>

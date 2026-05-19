@@ -6,3 +6,4 @@ packages:
 # (strictDepBuilds is on by default).
 allowBuilds:
   esbuild: true
+  protobufjs: false

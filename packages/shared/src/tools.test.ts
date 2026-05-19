@@ -16,6 +16,9 @@ import {
   WEB_SEARCH,
   WHITEBOARD_ADD_ELEMENT,
   WHITEBOARD_CLEAR,
+  DIAGRAM_LOAD,
+  DIAGRAM_MERGE,
+  DIAGRAM_CLEAR,
   type ToolName,
 } from "./tools";
 
@@ -24,6 +27,14 @@ describe("ALL_TOOLS", () => {
     const expected = new Set<ToolName>([
       "whiteboard_add_element",
       "whiteboard_clear",
+      "diagram_load",
+      "diagram_merge",
+      "diagram_clear",
+      "diagram_read",
+      "diagram_set_label",
+      "diagram_remove_cells",
+      "diagram_add_nodes",
+      "diagram_layout",
       "map_fly_to",
       "map_drop_pin",
       "map_draw_shape",
@@ -84,6 +95,18 @@ describe("individual tool definitions", () => {
 
   it("WHITEBOARD_CLEAR takes no required input", () => {
     expect(WHITEBOARD_CLEAR.input_schema.required ?? []).toEqual([]);
+  });
+
+  it("DIAGRAM_LOAD requires format and data", () => {
+    expect(DIAGRAM_LOAD.input_schema.required).toEqual(["format", "data"]);
+  });
+
+  it("DIAGRAM_MERGE requires xml", () => {
+    expect(DIAGRAM_MERGE.input_schema.required).toEqual(["xml"]);
+  });
+
+  it("DIAGRAM_CLEAR takes no required input", () => {
+    expect(DIAGRAM_CLEAR.input_schema.required ?? []).toEqual([]);
   });
 
   it("MAP_FLY_TO requires lat/lng", () => {

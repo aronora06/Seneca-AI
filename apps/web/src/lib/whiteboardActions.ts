@@ -10,29 +10,102 @@ import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type {
   ExcalidrawElement,
-  OrderedExcalidrawElement,
 } from "@excalidraw/excalidraw/element/types";
 import type { ExcalidrawElementSkeleton } from "@excalidraw/excalidraw/data/transform";
 
-import type { WhiteboardAddElementInput } from "@seneca/shared";
+import type {
+  WhiteboardAddElementInput,
+  WhiteboardPlacementResult,
+} from "@seneca/shared";
 
-const DEFAULT_STROKE = "#1e1e1e";
+import { ensureReadableStroke } from "./whiteboardTheme";
+import {
+  computeViewportBounds,
+  estimateTextWidth,
+  lintWhiteboardPlacement,
+  measureTextWidth,
+  placementFromElement,
+} from "./whiteboardScene";
+
 const DEFAULT_FILL = "transparent";
 
-export function applyWhiteboardAdd(
+export async function applyWhiteboardAdd(
   api: ExcalidrawImperativeAPI,
   rawInput: unknown,
-): void {
+): Promise<WhiteboardPlacementResult> {
+  if (typeof document !== "undefined" && document.fonts?.ready) {
+    await document.fonts.ready;
+  }
+
   const input = coerceAddInput(rawInput);
-  const skeleton = buildSkeleton(input);
-  if (!skeleton) return;
+  const appState = api.getAppState() as unknown as Record<string, unknown>;
+  const bg =
+    (appState.viewBackgroundColor as string | undefined) ?? "#f8f6f1";
+  const viewport = computeViewportBounds(appState);
+  const skeleton = buildSkeleton(input, bg, viewport);
+  if (!skeleton) {
+    throw new Error("Could not build whiteboard element.");
+  }
+
   const newElements = convertToExcalidrawElements(
     [skeleton] as Parameters<typeof convertToExcalidrawElements>[0],
     { regenerateIds: true },
   );
-  const existing = api.getSceneElements() as readonly OrderedExcalidrawElement[];
-  api.updateScene({
-    elements: [...existing, ...(newElements as ExcalidrawElement[])],
+  const created = newElements[0] as ExcalidrawElement | undefined;
+  if (!created) {
+    throw new Error("Excalidraw did not produce an element.");
+  }
+
+  let sceneElements = [
+    ...api.getSceneElements(),
+    created,
+  ] as ExcalidrawElement[];
+
+  if (input.type === "text" && input.text) {
+    sceneElements = widenTextElementIfNeeded(
+      sceneElements,
+      String(created.id),
+      input.text,
+      input.fontSize ?? 20,
+      viewport,
+    );
+  }
+
+  api.updateScene({ elements: sceneElements });
+
+  const strokeColor = ensureReadableStroke(input.strokeColor, bg);
+  const placed =
+    sceneElements.find((e) => e.id === created.id) ?? created;
+  const el = placed as unknown as Record<string, unknown>;
+  const warnings = lintWhiteboardPlacement(
+    el,
+    viewport,
+    input.type === "text" ? input.text : undefined,
+  );
+
+  return placementFromElement(el, strokeColor, warnings);
+}
+
+/**
+ * Excalidraw sometimes finalizes a narrower width than the skeleton asked for
+ * (font metrics, emoji). Bump width on the placed text element when needed.
+ */
+function widenTextElementIfNeeded(
+  elements: ExcalidrawElement[],
+  elementId: string,
+  text: string,
+  fontSize: number,
+  viewport: ReturnType<typeof computeViewportBounds>,
+): ExcalidrawElement[] {
+  const needed = measureTextWidth(text, fontSize);
+  const maxW = viewport.maxX - viewport.minX;
+  const targetWidth = Math.min(Math.max(needed, 80), maxW);
+
+  return elements.map((e) => {
+    if (e.id !== elementId || e.type !== "text") return e;
+    const current = Number(e.width ?? 0);
+    if (current >= targetWidth * 0.98) return e;
+    return { ...e, width: targetWidth } as ExcalidrawElement;
   });
 }
 
@@ -83,19 +156,29 @@ function coerceAddInput(raw: unknown): WhiteboardAddElementInput {
 
 function buildSkeleton(
   input: WhiteboardAddElementInput,
+  backgroundColor: string,
+  viewport: ReturnType<typeof computeViewportBounds>,
 ): ExcalidrawElementSkeleton | null {
-  const strokeColor = input.strokeColor ?? DEFAULT_STROKE;
+  const strokeColor = ensureReadableStroke(input.strokeColor, backgroundColor);
   switch (input.type) {
     case "text": {
       if (!input.text || !input.text.trim()) {
         throw new Error("Text element requires non-empty `text`.");
       }
+      const fontSize = input.fontSize ?? 20;
+      const maxW = viewport.maxX - viewport.minX - (input.x - viewport.minX);
+      const width = estimateTextWidth(input.text, fontSize, input.width);
+      const capped =
+        Number.isFinite(maxW) && maxW > 80
+          ? Math.min(width, maxW - 16)
+          : width;
       return {
         type: "text",
         x: input.x,
         y: input.y,
         text: input.text,
-        fontSize: input.fontSize ?? 20,
+        fontSize,
+        width: capped,
         strokeColor,
       };
     }
@@ -126,10 +209,6 @@ function buildSkeleton(
       };
     }
     case "freedraw": {
-      // Excalidraw's freedraw element requires pressure data and a bunch of
-      // other internal fields we can't easily synthesize. We approximate
-      // freehand by rendering Seneca's intent as a `line` with many points;
-      // it looks the same once stroke-roundness is applied.
       const pts = (input.points ?? [
         [0, 0],
         [40, 0],

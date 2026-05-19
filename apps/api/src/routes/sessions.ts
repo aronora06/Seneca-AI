@@ -9,6 +9,8 @@
 
 import { Router, type Response } from "express";
 import type {
+  ActiveTab,
+  DiagramsState,
   DocumentsState,
   MapState,
   WebState,
@@ -301,6 +303,43 @@ sessionsRouter.put(
   },
 );
 
+const MAX_DIAGRAM_XML_BYTES = 500_000;
+
+function isValidDiagramsState(v: unknown): v is DiagramsState {
+  if (!v || typeof v !== "object") return false;
+  const xml = (v as { xml?: unknown }).xml;
+  if (typeof xml !== "string" || xml.length === 0) return false;
+  if (xml.length > MAX_DIAGRAM_XML_BYTES) return false;
+  return true;
+}
+
+sessionsRouter.put(
+  "/api/sessions/:id/diagrams",
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    if (!req.user) {
+      res.status(401).end();
+      return;
+    }
+    const id = req.params.id;
+    const diagrams = (req.body ?? {}) as DiagramsState;
+    if (!isValidDiagramsState(diagrams)) {
+      res.status(400).json({
+        error: `Body must be { xml: string } with xml ≤ ${MAX_DIAGRAM_XML_BYTES} bytes.`,
+      });
+      return;
+    }
+    try {
+      await sessionStore.updateDiagrams(id, req.user.id, diagrams, req.jwt);
+      res.status(204).end();
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
 sessionsRouter.put(
   "/api/sessions/:id/transcript",
   requireAuth,
@@ -413,6 +452,45 @@ function isValidWebState(v: unknown): v is WebState {
   if (typeof w.historyIndex !== "number") return false;
   return true;
 }
+
+sessionsRouter.put(
+  "/api/sessions/:id/active-tab",
+  requireAuth,
+  async (req: AuthedRequest, res: Response) => {
+    if (!req.user) {
+      res.status(401).end();
+      return;
+    }
+    const id = req.params.id;
+    const tab = (req.body as { activeTab?: unknown })?.activeTab;
+    if (
+      tab !== "whiteboard" &&
+      tab !== "diagrams" &&
+      tab !== "documents" &&
+      tab !== "web" &&
+      tab !== "map"
+    ) {
+      res.status(400).json({
+        error:
+          "Body must be { activeTab: 'whiteboard' | 'diagrams' | 'documents' | 'web' | 'map' }.",
+      });
+      return;
+    }
+    try {
+      await sessionStore.updateActiveTab(
+        id,
+        req.user.id,
+        tab as ActiveTab,
+        req.jwt,
+      );
+      res.status(204).end();
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
 
 sessionsRouter.put(
   "/api/sessions/:id/documents",

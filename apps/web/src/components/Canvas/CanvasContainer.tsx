@@ -6,6 +6,7 @@ import { WhiteboardTab } from "./WhiteboardTab";
 import { MapTab } from "./MapTab";
 import { WebTab } from "./WebTab";
 import { DocumentTab } from "./DocumentTab";
+import { DiagramsTab } from "./DiagramsTab";
 
 /**
  * Phase 7 / tech-debt #4: StrictMode covers every canvas-tab subtree
@@ -25,6 +26,9 @@ export function CanvasContainer() {
   const whiteboardReady = useSenecaStore(
     (s) => sessionReady && s.whiteboard !== null,
   );
+  const diagramsReady = useSenecaStore(
+    (s) => sessionReady && s.diagrams !== null,
+  );
   const mapReady = useSenecaStore(
     (s) => sessionReady && s.mapState !== null,
   );
@@ -36,7 +40,7 @@ export function CanvasContainer() {
   );
 
   return (
-    <section className="flex h-full flex-1 flex-col overflow-hidden bg-surface">
+    <section className="flex h-full flex-1 flex-col overflow-hidden bg-transparent">
       <StrictMode>
         <TabBar />
       </StrictMode>
@@ -51,6 +55,24 @@ export function CanvasContainer() {
             }`}
           >
             <WhiteboardTab />
+          </div>
+        )}
+        {diagramsReady && (
+          <StrictMode>
+            <div
+              className={`absolute inset-0 ${
+                activeTab === "diagrams" ? "visible" : "invisible"
+              }`}
+            >
+              <DiagramsTab />
+            </div>
+          </StrictMode>
+        )}
+        {!diagramsReady && activeTab === "diagrams" && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="font-serif text-base italic text-fg-subtle">
+              Preparing the diagrams tab…
+            </div>
           </div>
         )}
         {/* Same trick for the map — keep it mounted to preserve Leaflet

@@ -9,6 +9,8 @@
 
 import { create } from "zustand";
 import type {
+  ActiveTab,
+  DiagramsState,
   DocumentsState,
   MapState,
   SessionUsage,
@@ -21,12 +23,17 @@ import type {
 } from "@seneca/shared";
 import { DEFAULT_SESSION_USAGE } from "@seneca/shared";
 
+export type { ActiveTab };
+
+import {
+  resetActiveTabPersistence,
+  schedulePersistActiveTab,
+} from "../lib/persistActiveTab";
 import { readPrefs, type VisionDefault } from "../lib/userPreferences";
+import type { VoiceActivityPhase } from "../hooks/useVoiceActivity";
 
 export type DockSide = "left" | "right";
-export type VoiceMode = "idle" | "listening" | "speaking";
-export type ActiveTab = "whiteboard" | "documents" | "web" | "map";
-
+export type VoiceMode = "idle" | "listening" | "speaking" | "thinking";
 interface VoicePaneState {
   dockSide: DockSide;
   collapsed: boolean;
@@ -35,6 +42,9 @@ interface VoicePaneState {
   continuousListening: boolean;
   /** Interim STT result not yet committed to the transcript. */
   interimSpeech: string;
+  /** Live activity phase for header pill + diagnostics. */
+  activityPhase: VoiceActivityPhase;
+  activityLabel: string | null;
 }
 
 interface VisionState {
@@ -119,9 +129,12 @@ interface SenecaState {
   activeTab: ActiveTab;
   tabPulseTarget: ActiveTab | null;
   whiteboard: WhiteboardState | null;
+  diagrams: DiagramsState | null;
   mapState: MapState | null;
   webState: WebState | null;
   documentsState: DocumentsState | null;
+  /** True while the web tab shows Tavily search results instead of a page. */
+  webSearchOverlayOpen: boolean;
   streaming: StreamingState;
   /** Tool results pending delivery to Seneca on the next request. */
   pendingToolResults: ToolResult[];
@@ -141,6 +154,7 @@ interface SenecaState {
   setDockSide: (side: DockSide) => void;
   toggleCollapsed: () => void;
   setVoiceMode: (mode: VoiceMode) => void;
+  setVoiceActivity: (phase: VoiceActivityPhase, label: string | null) => void;
   setMuted: (muted: boolean) => void;
   setContinuousListening: (on: boolean) => void;
   setInterimSpeech: (interim: string) => void;
@@ -151,6 +165,8 @@ interface SenecaState {
   setVisionEnabled: (enabled: boolean, opts?: { pinned?: boolean }) => void;
   /** Phase A — set the vision mode directly (segmented control). */
   setVisionMode: (mode: VisionMode) => void;
+  /** Apply the persisted vision-default preference to the live toggle. */
+  applyVisionDefault: (def: VisionDefault) => void;
 
   // ── transcript
   setTranscript: (transcript: TranscriptMessage[]) => void;
@@ -179,19 +195,25 @@ interface SenecaState {
     name: string;
     transcript: TranscriptMessage[];
     whiteboard: WhiteboardState;
+    diagrams: DiagramsState;
     map: MapState;
     web: WebState;
     documents: DocumentsState;
+    activeTab?: ActiveTab;
   }) => void;
 
   // ── whiteboard
   setWhiteboard: (state: WhiteboardState) => void;
+
+  // ── diagrams
+  setDiagrams: (state: DiagramsState) => void;
 
   // ── map
   setMap: (state: MapState) => void;
 
   // ── web
   setWeb: (state: WebState) => void;
+  setWebSearchOverlayOpen: (open: boolean) => void;
 
   // ── documents
   setDocuments: (state: DocumentsState) => void;
@@ -283,6 +305,8 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
     muted: false,
     continuousListening: readContinuous(),
     interimSpeech: "",
+    activityPhase: "idle",
+    activityLabel: null,
   },
   // Phase A — boot the vision toggle from the user's persisted default
   // so the first session of the day already reflects their preference.
@@ -291,9 +315,11 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
   activeTab: "whiteboard",
   tabPulseTarget: null,
   whiteboard: null,
+  diagrams: null,
   mapState: null,
   webState: null,
   documentsState: null,
+  webSearchOverlayOpen: false,
   streaming: {
     activeTurnId: null,
     partialText: "",
@@ -311,6 +337,10 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
   toggleCollapsed: () =>
     set((s) => ({ voice: { ...s.voice, collapsed: !s.voice.collapsed } })),
   setVoiceMode: (mode) => set((s) => ({ voice: { ...s.voice, mode } })),
+  setVoiceActivity: (phase, label) =>
+    set((s) => ({
+      voice: { ...s.voice, activityPhase: phase, activityLabel: label },
+    })),
   setMuted: (muted) => set((s) => ({ voice: { ...s.voice, muted } })),
   setContinuousListening: (on) => {
     writeContinuous(on);
@@ -337,6 +367,7 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
       },
     })),
   setVisionMode: (mode) => set({ vision: visionStateForMode(mode) }),
+  applyVisionDefault: (def) => set({ vision: visionStateForDefault(def) }),
 
   setTranscript: (transcript) =>
     set({ transcript, resumeBannerVisible: transcript.length > 0 }),
@@ -368,24 +399,40 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
       return s;
     }),
 
-  setActiveTab: (tab, opts) =>
+  setActiveTab: (tab, opts) => {
+    const sessionId = useSenecaStore.getState().session.id;
+    schedulePersistActiveTab(sessionId, tab);
     set((s) => ({
       activeTab: tab,
       tabPulseTarget: opts?.pulse && tab !== s.activeTab ? tab : null,
-    })),
+    }));
+  },
   clearTabPulse: () => set({ tabPulseTarget: null }),
 
   setSession: (id, name) =>
     set((s) => ({ session: { id, name: name ?? s.session.name } })),
 
-  loadSession: ({ id, name, transcript, whiteboard, map, web, documents }) =>
-    set({
+  loadSession: ({
+    id,
+    name,
+    transcript,
+    whiteboard,
+    diagrams,
+    map,
+    web,
+    documents,
+    activeTab: loadedTab,
+  }) => {
+    resetActiveTabPersistence();
+    return set({
       session: { id, name },
       transcript,
       whiteboard,
+      diagrams,
       mapState: map,
       webState: web,
       documentsState: documents,
+      webSearchOverlayOpen: false,
       streaming: {
         activeTurnId: null,
         partialText: "",
@@ -395,7 +442,7 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
       // Phase A — seed the vision toggle from the user's persisted
       // default so power users don't have to flip the eye every session.
       vision: visionStateForDefault(readVisionDefault()),
-      activeTab: "whiteboard",
+      activeTab: loadedTab ?? "whiteboard",
       tabPulseTarget: null,
       sessionUsage: { ...DEFAULT_SESSION_USAGE },
       lastTurnUsage: null,
@@ -404,13 +451,25 @@ export const useSenecaStore = create<SenecaState>((set, get) => ({
       // sessions skip the banner so the empty-state copy speaks for
       // itself.
       resumeBannerVisible: transcript.length > 0,
-    }),
+      voice: {
+        ...get().voice,
+        mode: "idle",
+        interimSpeech: "",
+        activityPhase: "idle",
+        activityLabel: null,
+      },
+    });
+  },
 
   setWhiteboard: (state) => set({ whiteboard: state }),
+
+  setDiagrams: (state) => set({ diagrams: state }),
 
   setMap: (state) => set({ mapState: state }),
 
   setWeb: (state) => set({ webState: state }),
+
+  setWebSearchOverlayOpen: (open) => set({ webSearchOverlayOpen: open }),
 
   setDocuments: (state) => set({ documentsState: state }),
 

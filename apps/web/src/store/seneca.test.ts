@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type {
+  DiagramsState,
   DocumentsState,
   MapState,
   TranscriptMessage,
   WebState,
   WhiteboardState,
 } from "@seneca/shared";
+import { DEFAULT_DIAGRAMS_STATE } from "@seneca/shared";
 
 import {
   useSenecaStore,
@@ -25,6 +27,7 @@ const sampleTranscript: TranscriptMessage[] = [
 ];
 
 const sampleWhiteboard: WhiteboardState = { elements: [] };
+const sampleDiagrams: DiagramsState = { ...DEFAULT_DIAGRAMS_STATE };
 const sampleMap: MapState = {
   center: [40, -73],
   zoom: 8,
@@ -44,6 +47,7 @@ beforeEach(() => {
     session: { id: null, name: "" },
     transcript: [],
     whiteboard: null,
+    diagrams: null,
     mapState: null,
     webState: null,
     documentsState: null,
@@ -71,6 +75,7 @@ describe("loadSession", () => {
       name: "Tax research",
       transcript: sampleTranscript,
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -92,6 +97,7 @@ describe("loadSession", () => {
       name: "Fresh",
       transcript: [],
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -110,6 +116,7 @@ describe("loadSession", () => {
       name: "Fresh",
       transcript: [],
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -128,6 +135,7 @@ describe("loadSession", () => {
       name: "Once-default",
       transcript: [],
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -145,6 +153,7 @@ describe("loadSession", () => {
       name: "Locked-default",
       transcript: [],
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -336,6 +345,7 @@ describe("resumeBanner (Phase D)", () => {
       name: "Old session",
       transcript: sampleTranscript,
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -349,6 +359,7 @@ describe("resumeBanner (Phase D)", () => {
       name: "Fresh",
       transcript: [],
       whiteboard: sampleWhiteboard,
+      diagrams: sampleDiagrams,
       map: sampleMap,
       web: sampleWeb,
       documents: sampleDocuments,
@@ -380,5 +391,14 @@ describe("resumeBanner (Phase D)", () => {
     useSenecaStore.getState().dismissResumeBanner();
     expect(useSenecaStore.getState().resumeBannerVisible).toBe(false);
     expect(useSenecaStore.getState().transcript).toEqual(sampleTranscript);
+  });
+});
+
+describe("setVoiceActivity", () => {
+  it("updates activity phase and label on the voice slice", () => {
+    useSenecaStore.getState().setVoiceActivity("senecaStreaming", "Seneca is writing");
+    const voice = useSenecaStore.getState().voice;
+    expect(voice.activityPhase).toBe("senecaStreaming");
+    expect(voice.activityLabel).toBe("Seneca is writing");
   });
 });

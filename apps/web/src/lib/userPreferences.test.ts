@@ -85,3 +85,38 @@ describe("userPreferences — Phase B voice fields", () => {
     expect(p.pttKey).toBe(" ");
   });
 });
+
+describe("userPreferences — Phase G Conversation Mode", () => {
+  it("defaults conversationMode and conversationModeHintDismissed to false", () => {
+    const p = readPrefs();
+    expect(p.conversationMode).toBe(false);
+    expect(p.conversationModeHintDismissed).toBe(false);
+  });
+
+  it("round-trips both fields", () => {
+    writePrefs({
+      conversationMode: true,
+      conversationModeHintDismissed: true,
+    });
+    const p = readPrefs();
+    expect(p.conversationMode).toBe(true);
+    expect(p.conversationModeHintDismissed).toBe(true);
+  });
+
+  it("rejects non-boolean values on read", () => {
+    try {
+      localStorage.setItem(
+        "seneca:prefs",
+        JSON.stringify({
+          conversationMode: "on",
+          conversationModeHintDismissed: 1,
+        }),
+      );
+    } catch {
+      // ignore
+    }
+    const p = readPrefs();
+    expect(p.conversationMode).toBe(false);
+    expect(p.conversationModeHintDismissed).toBe(false);
+  });
+});

@@ -18,6 +18,7 @@ vi.mock("@excalidraw/excalidraw", () => ({
 // and pulses the right tab; the actual handlers are tested elsewhere.
 const wbApi = {
   getSceneElements: vi.fn(() => []),
+  getAppState: vi.fn(() => ({ viewBackgroundColor: "#f8f6f1" })),
   updateScene: vi.fn(),
 };
 const mapApi = {
@@ -46,6 +47,30 @@ vi.mock("./webBridge", () => ({
 vi.mock("./documentBridge", () => ({
   getDocumentApi: () => docApi,
 }));
+
+const diagramFns = vi.hoisted(() => ({
+  applyDiagramLoad: vi.fn(async () => ({
+    cellCount: 2,
+    labels: ["A"],
+    hasContent: true,
+  })),
+  applyDiagramMerge: vi.fn(async () => ({
+    cellCount: 2,
+    labels: ["A"],
+    hasContent: true,
+    merged: true,
+  })),
+  applyDiagramClear: vi.fn(async () => ({
+    cellCount: 0,
+    labels: [],
+    hasContent: false,
+    cleared: true,
+  })),
+  coerceDiagramLoadInput: (x: unknown) => x,
+  coerceDiagramMergeInput: (x: unknown) => x,
+}));
+
+vi.mock("./diagramActions", () => diagramFns);
 
 // Mock the API client so web_search doesn't try a real fetch.
 vi.mock("./api", () => ({
@@ -94,6 +119,23 @@ describe("dispatchToolCall routing", () => {
     expect(wbApi.updateScene).toHaveBeenCalledWith({ elements: [] });
   });
 
+  it("routes diagram_load and pulses the diagrams tab", async () => {
+    const r = await dispatchToolCall(
+      call("diagram_load", { format: "mermaid", data: "flowchart TD\n  A-->B" }),
+    );
+    expect(r.ok).toBe(true);
+    expect(diagramFns.applyDiagramLoad).toHaveBeenCalled();
+    expect(useSenecaStore.getState().activeTab).toBe("diagrams");
+  });
+
+  it("routes diagram_merge", async () => {
+    const r = await dispatchToolCall(
+      call("diagram_merge", { xml: "<mxGraphModel></mxGraphModel>" }),
+    );
+    expect(r.ok).toBe(true);
+    expect(diagramFns.applyDiagramMerge).toHaveBeenCalled();
+  });
+
   it("routes map_fly_to and pulses the map tab", async () => {
     const r = await dispatchToolCall(call("map_fly_to", { lat: 1, lng: 2 }));
     expect(r.ok).toBe(true);
@@ -140,6 +182,12 @@ describe("dispatchToolCall routing", () => {
     expect(r.ok).toBe(true);
     expect(docApi.goToPage).not.toHaveBeenCalled();
     expect(useSenecaStore.getState().activeTab).toBe("documents");
+  });
+
+  it("diagram_read is server-fulfilled and just pulses the tab", async () => {
+    const r = await dispatchToolCall(call("diagram_read", {}));
+    expect(r.ok).toBe(true);
+    expect(useSenecaStore.getState().activeTab).toBe("diagrams");
   });
 
   it("document_list is server-fulfilled and just pulses the tab", async () => {

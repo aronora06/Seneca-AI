@@ -11,6 +11,8 @@
  */
 
 import { useSyncExternalStore } from "react";
+import type { SemanticTokens } from "../theme/tokens";
+import { DEFAULT_PALETTE_ID } from "../theme/palettes";
 
 export interface CustomInstructions {
   aboutYou: string;
@@ -37,7 +39,12 @@ export type VisionDefault = "off" | "once" | "locked";
 
 export interface UserPreferences {
   displayName: string;
+  /** @deprecated Use paletteId — kept for legacy localStorage blobs. */
   accentId: string;
+  /** Colour palette preset id (see theme/palettes.ts). */
+  paletteId: string;
+  /** Per-token overrides applied on top of the selected palette. */
+  paletteOverrides: Partial<SemanticTokens> | null;
   fontSize: FontSize;
   backgroundStyle: BackgroundStyle;
   /** Browser-TTS voice URI (legacy fallback path). */
@@ -84,11 +91,44 @@ export interface UserPreferences {
    */
   pttKey: string;
   customInstructions: CustomInstructions;
+  /**
+   * Phase F — onboarding hint dismissal. The hint shows once on
+   * boot for a brand-new local; clicking "Got it" sets this to
+   * true so we never re-show it.
+   */
+  onboardingDismissed: boolean;
+  /**
+   * Phase G — Conversation Mode (hands-free with Silero VAD).
+   *
+   * When true, a real voice-activity detector (Silero VAD via
+   * @ricky0123/vad-web) gates the recognizer and the barge-in
+   * trigger, replacing the brittle "interim text growing" heuristic.
+   * This is the mode users want for actual hands-free conversation:
+   * speak whenever you want, Seneca yields the moment you start
+   * talking, no buttons to press. Off by default so existing users
+   * see the same behaviour until they opt in.
+   */
+  conversationMode: boolean;
+  /**
+   * Phase G — one-time hint pointing at the new Conversation Mode
+   * button in the floating voice dock. Set to true the first time
+   * the user either toggles the mode on or dismisses the hint.
+   */
+  conversationModeHintDismissed: boolean;
+  /** Last position of the floating voice dock (workspace-local px). */
+  floatingVoicePosition: { x: number; y: number } | null;
+  /**
+   * Directional waveforms and activity beacons in the voice pane.
+   * When false, only minimal status dots are shown.
+   */
+  voiceVisualEffects: boolean;
 }
 
 export const DEFAULTS: UserPreferences = {
   displayName: "",
   accentId: "ember",
+  paletteId: DEFAULT_PALETTE_ID,
+  paletteOverrides: null,
   fontSize: "md",
   backgroundStyle: "gradient",
   ttsVoiceURI: null,
@@ -103,6 +143,11 @@ export const DEFAULTS: UserPreferences = {
   vadEnabled: true,
   pttKey: " ",
   customInstructions: { aboutYou: "", howToRespond: "" },
+  onboardingDismissed: false,
+  conversationMode: false,
+  conversationModeHintDismissed: false,
+  floatingVoicePosition: null,
+  voiceVisualEffects: true,
 };
 
 const STORAGE_KEY = "seneca:prefs";
@@ -184,12 +229,69 @@ export function usePrefs(): UserPreferences {
   return useSyncExternalStore(subscribePrefs, getSnapshot, () => DEFAULTS);
 }
 
+const TOKEN_KEYS: (keyof SemanticTokens)[] = [
+  "surface",
+  "surfaceSunk",
+  "card",
+  "border",
+  "fg",
+  "fgMuted",
+  "fgSubtle",
+  "fgOn",
+  "accent",
+  "accentSoft",
+  "accentFg",
+  "danger",
+  "dangerSoft",
+  "dangerFg",
+  "ok",
+  "okSoft",
+];
+
+function isRgbTriple(v: unknown): v is string {
+  if (typeof v !== "string") return false;
+  const parts = v.trim().split(/\s+/);
+  if (parts.length !== 3) return false;
+  return parts.every((p) => {
+    const n = Number(p);
+    return Number.isInteger(n) && n >= 0 && n <= 255;
+  });
+}
+
+function mergeFloatingVoicePosition(
+  raw: unknown,
+): { x: number; y: number } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as { x?: unknown; y?: unknown };
+  if (typeof o.x !== "number" || typeof o.y !== "number") return null;
+  if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) return null;
+  return { x: o.x, y: o.y };
+}
+
+function mergePaletteOverrides(
+  raw: unknown,
+): Partial<SemanticTokens> | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") return null;
+  const out: Partial<SemanticTokens> = {};
+  for (const key of TOKEN_KEYS) {
+    const v = (raw as Record<string, unknown>)[key];
+    if (isRgbTriple(v)) out[key] = v;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function merge(raw: Partial<UserPreferences>): UserPreferences {
   return {
     displayName:
       typeof raw.displayName === "string" ? raw.displayName : DEFAULTS.displayName,
     accentId:
       typeof raw.accentId === "string" ? raw.accentId : DEFAULTS.accentId,
+    paletteId:
+      typeof raw.paletteId === "string" && raw.paletteId.length > 0
+        ? raw.paletteId
+        : DEFAULTS.paletteId,
+    paletteOverrides: mergePaletteOverrides(raw.paletteOverrides),
     fontSize:
       raw.fontSize === "sm" || raw.fontSize === "md" || raw.fontSize === "lg"
         ? raw.fontSize
@@ -243,6 +345,23 @@ function merge(raw: Partial<UserPreferences>): UserPreferences {
       typeof raw.pttKey === "string" && raw.pttKey.length > 0
         ? raw.pttKey
         : DEFAULTS.pttKey,
+    onboardingDismissed:
+      typeof raw.onboardingDismissed === "boolean"
+        ? raw.onboardingDismissed
+        : DEFAULTS.onboardingDismissed,
+    conversationMode:
+      typeof raw.conversationMode === "boolean"
+        ? raw.conversationMode
+        : DEFAULTS.conversationMode,
+    conversationModeHintDismissed:
+      typeof raw.conversationModeHintDismissed === "boolean"
+        ? raw.conversationModeHintDismissed
+        : DEFAULTS.conversationModeHintDismissed,
+    floatingVoicePosition: mergeFloatingVoicePosition(raw.floatingVoicePosition),
+    voiceVisualEffects:
+      typeof raw.voiceVisualEffects === "boolean"
+        ? raw.voiceVisualEffects
+        : DEFAULTS.voiceVisualEffects,
     customInstructions: {
       aboutYou:
         typeof raw.customInstructions?.aboutYou === "string"

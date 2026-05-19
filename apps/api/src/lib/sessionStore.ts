@@ -13,6 +13,8 @@
  */
 
 import type {
+  ActiveTab,
+  DiagramsState,
   DocumentsState,
   MapState,
   SessionRecord,
@@ -22,10 +24,12 @@ import type {
   WhiteboardState,
 } from "@seneca/shared";
 import {
+  DEFAULT_DIAGRAMS_STATE,
   DEFAULT_DOCUMENTS_STATE,
   DEFAULT_MAP_STATE,
   DEFAULT_SESSION_USAGE,
   DEFAULT_WEB_STATE,
+  isEmptyDiagram,
 } from "@seneca/shared";
 
 import { env } from "../env.js";
@@ -68,7 +72,12 @@ export interface SessionSummary {
 }
 
 /** Canvas-tab markers shown as icons on a session card. */
-export type SessionTabFlag = "documents" | "web" | "map" | "whiteboard";
+export type SessionTabFlag =
+  | "documents"
+  | "web"
+  | "map"
+  | "whiteboard"
+  | "diagrams";
 
 export interface SessionStore {
   /** Get the user's current session, creating one if it doesn't exist. */
@@ -102,17 +111,17 @@ export interface SessionStore {
     jwt?: string,
   ): Promise<void>;
   /**
-   * Confirm a session belongs to the user; returns the id + web + documents
-   * state or null. The web state is needed so the chat agent loop can resolve
-   * `web_read_page` against the current URL without a second round-trip;
-   * the documents state lets the loop clamp `document_go_to_page` calls
-   * against the real page count without another query.
+   * Confirm a session belongs to the user; returns id + web + documents +
+   * diagrams state or null. Web state backs `web_read_page`; documents state
+   * backs document tools; diagrams XML backs `diagram_read`.
    */
   getById(
     sessionId: string,
     userId: string,
     jwt?: string,
-  ): Promise<Pick<SessionRecord, "id" | "web" | "documents"> | null>;
+  ): Promise<
+    Pick<SessionRecord, "id" | "web" | "documents" | "diagrams"> | null
+  >;
   /** Full row for switching sessions on the client. Null if not owned / missing. */
   getFullById(
     sessionId: string,
@@ -123,6 +132,12 @@ export interface SessionStore {
     sessionId: string,
     userId: string,
     whiteboard: WhiteboardState,
+    jwt?: string,
+  ): Promise<void>;
+  updateDiagrams(
+    sessionId: string,
+    userId: string,
+    diagrams: DiagramsState,
     jwt?: string,
   ): Promise<void>;
   updateTranscript(
@@ -147,6 +162,12 @@ export interface SessionStore {
     sessionId: string,
     userId: string,
     documents: DocumentsState,
+    jwt?: string,
+  ): Promise<void>;
+  updateActiveTab(
+    sessionId: string,
+    userId: string,
+    activeTab: ActiveTab,
     jwt?: string,
   ): Promise<void>;
   /**
@@ -223,6 +244,9 @@ export function summarizeSession(row: SessionRecord): SessionSummary {
   ) {
     tabs.push("whiteboard");
   }
+  if (row.diagrams?.xml && !isEmptyDiagram(row.diagrams.xml)) {
+    tabs.push("diagrams");
+  }
   return {
     id: row.id,
     name: row.name,
@@ -274,6 +298,7 @@ const memoryStore: SessionStore = {
       name: "Dev session",
       transcript: [],
       whiteboard: { elements: [] },
+      diagrams: { ...DEFAULT_DIAGRAMS_STATE },
       map: { ...DEFAULT_MAP_STATE },
       web: { ...DEFAULT_WEB_STATE },
       documents: { ...DEFAULT_DOCUMENTS_STATE },
@@ -309,6 +334,7 @@ const memoryStore: SessionStore = {
       name: name.trim() || "Untitled",
       transcript: [],
       whiteboard: { elements: [] },
+      diagrams: { ...DEFAULT_DIAGRAMS_STATE },
       map: { ...DEFAULT_MAP_STATE },
       web: { ...DEFAULT_WEB_STATE },
       documents: { ...DEFAULT_DOCUMENTS_STATE },
@@ -337,7 +363,12 @@ const memoryStore: SessionStore = {
   async getById(sessionId, userId) {
     const row = memorySessions.get(sessionId);
     if (!row || row.user_id !== userId) return null;
-    return { id: row.id, web: row.web, documents: row.documents };
+    return {
+      id: row.id,
+      web: row.web,
+      documents: row.documents,
+      diagrams: row.diagrams,
+    };
   },
 
   async getFullById(sessionId, userId) {
@@ -350,6 +381,13 @@ const memoryStore: SessionStore = {
     const row = memorySessions.get(sessionId);
     if (!row || row.user_id !== userId) return;
     row.whiteboard = whiteboard;
+    row.updated_at = nowIso();
+  },
+
+  async updateDiagrams(sessionId, userId, diagrams) {
+    const row = memorySessions.get(sessionId);
+    if (!row || row.user_id !== userId) return;
+    row.diagrams = diagrams;
     row.updated_at = nowIso();
   },
 
@@ -378,6 +416,13 @@ const memoryStore: SessionStore = {
     const row = memorySessions.get(sessionId);
     if (!row || row.user_id !== userId) return;
     row.documents = documents;
+    row.updated_at = nowIso();
+  },
+
+  async updateActiveTab(sessionId, userId, activeTab) {
+    const row = memorySessions.get(sessionId);
+    if (!row || row.user_id !== userId) return;
+    row.activeTab = activeTab;
     row.updated_at = nowIso();
   },
 
@@ -459,7 +504,7 @@ const supabaseStore: SessionStore = {
     const { data, error } = await client
       .from("sessions")
       .select(
-        "id, name, created_at, updated_at, pinned, transcript, documents, web, map, whiteboard",
+        "id, name, created_at, updated_at, pinned, transcript, documents, web, map, whiteboard, diagrams",
       )
       .order("updated_at", { ascending: false });
     if (error) {
@@ -470,7 +515,7 @@ const supabaseStore: SessionStore = {
         const fallback = await client
           .from("sessions")
           .select(
-            "id, name, created_at, updated_at, transcript, documents, web, map, whiteboard",
+            "id, name, created_at, updated_at, transcript, documents, web, map, whiteboard, diagrams",
           )
           .order("updated_at", { ascending: false });
         if (fallback.error) throw new Error(fallback.error.message);
@@ -527,18 +572,26 @@ const supabaseStore: SessionStore = {
     const client = supabaseForUser(requireJwt(jwt));
     const { data, error } = await client
       .from("sessions")
-      .select("id, web, documents")
+      .select("id, web, documents, diagrams")
       .eq("id", sessionId)
       .maybeSingle();
     if (error) throw new Error(error.message);
     if (!data) return null;
-    const row = data as { id: string; web?: unknown; documents?: unknown };
+    const row = data as {
+      id: string;
+      web?: unknown;
+      documents?: unknown;
+      diagrams?: unknown;
+    };
     return {
       id: row.id,
       web: isValidWeb(row.web) ? row.web : { ...DEFAULT_WEB_STATE },
       documents: isValidDocuments(row.documents)
         ? row.documents
         : { ...DEFAULT_DOCUMENTS_STATE },
+      diagrams: isValidDiagrams(row.diagrams)
+        ? row.diagrams
+        : { ...DEFAULT_DIAGRAMS_STATE },
     };
   },
 
@@ -561,6 +614,21 @@ const supabaseStore: SessionStore = {
       .update({ whiteboard })
       .eq("id", sessionId);
     if (error) throw new Error(error.message);
+  },
+
+  async updateDiagrams(sessionId, _userId, diagrams, jwt) {
+    const client = supabaseForUser(requireJwt(jwt));
+    const { error } = await client
+      .from("sessions")
+      .update({ diagrams })
+      .eq("id", sessionId);
+    if (error) {
+      if (/column .* does not exist/i.test(error.message)) {
+        console.warn("[seneca] updateDiagrams: diagrams column missing");
+        return;
+      }
+      throw new Error(error.message);
+    }
   },
 
   async updateTranscript(sessionId, _userId, transcript, jwt) {
@@ -597,6 +665,18 @@ const supabaseStore: SessionStore = {
       .update({ documents })
       .eq("id", sessionId);
     if (error) throw new Error(error.message);
+  },
+
+  async updateActiveTab(sessionId, _userId, activeTab, jwt) {
+    const client = supabaseForUser(requireJwt(jwt));
+    const { error } = await client
+      .from("sessions")
+      .update({ active_tab: activeTab })
+      .eq("id", sessionId);
+    if (error) {
+      // Column may be absent on older deployments — non-fatal.
+      console.warn("[seneca] updateActiveTab:", error.message);
+    }
   },
 
   async setPinned(sessionId, _userId, pinned, jwt) {
@@ -678,8 +758,23 @@ function withDefaults(row: SessionRecord): SessionRecord {
   if (!isValidDocuments(next.documents)) {
     next = { ...next, documents: { ...DEFAULT_DOCUMENTS_STATE } };
   }
+  if (!isValidDiagrams(next.diagrams)) {
+    next = { ...next, diagrams: { ...DEFAULT_DIAGRAMS_STATE } };
+  }
   if (typeof next.pinned !== "boolean") {
     next = { ...next, pinned: false };
+  }
+  const tab = (next as SessionRecord & { active_tab?: string }).active_tab;
+  if (
+    tab === "whiteboard" ||
+    tab === "diagrams" ||
+    tab === "documents" ||
+    tab === "web" ||
+    tab === "map"
+  ) {
+    next = { ...next, activeTab: tab };
+  } else if (!next.activeTab) {
+    next = { ...next, activeTab: "whiteboard" };
   }
   return next;
 }
@@ -705,6 +800,14 @@ function isValidDocuments(v: unknown): v is DocumentsState {
     !!v &&
     typeof v === "object" &&
     Array.isArray((v as { items?: unknown }).items)
+  );
+}
+
+function isValidDiagrams(v: unknown): v is DiagramsState {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as { xml?: unknown }).xml === "string"
   );
 }
 

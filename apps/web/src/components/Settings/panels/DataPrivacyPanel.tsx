@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+
 import { DangerZone, PanelIntro, PreviewBanner, Section } from "./_shared";
 
 export function DataPrivacyPanel() {
@@ -37,7 +39,15 @@ export function DataPrivacyPanel() {
         <p className="text-sm text-fg-subtle">
           Memories are never used to train Anthropic's models. They live in
           your account only and are sent to Claude as part of the system
-          context on each turn.
+          context on each turn. See also our{" "}
+          <Link to="/privacy" className="text-accent hover:underline">
+            Privacy
+          </Link>{" "}
+          and{" "}
+          <Link to="/terms" className="text-accent hover:underline">
+            Terms
+          </Link>{" "}
+          notices.
         </p>
       </Section>
 

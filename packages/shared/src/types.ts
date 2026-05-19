@@ -6,6 +6,11 @@
  * package.
  */
 
+import type { DiagramsState } from "./diagramEmpty.js";
+import type { DiagramEdge, DiagramVertex } from "./diagramGraph.js";
+
+export type { DiagramsState } from "./diagramEmpty.js";
+
 export type Role = "user" | "seneca" | "system";
 
 /** A tool call surfaced to the client over SSE while a Claude turn is streaming. */
@@ -73,6 +78,13 @@ export interface TranscriptMessage {
   tools?: ToolCallRecord[];
   /** Set when role === "system". */
   notice?: SystemNotice;
+  /**
+   * Set when the user interrupted Seneca mid-response (barge-in).
+   * The `text` field holds whatever streamed in before the abort;
+   * the next turn's prompt context tells Seneca his last reply was
+   * cut short so he can adapt naturally rather than re-explain.
+   */
+  interrupted?: boolean;
 }
 
 /** SSE event shapes streamed from /api/chat and /api/vision. */
@@ -175,6 +187,14 @@ export const DEFAULT_SESSION_USAGE: SessionUsage = {
  */
 export const ELEVENLABS_USD_PER_CHAR = 0.00018;
 
+/** Canvas tab the user (and Seneca's tools) are focused on. */
+export type ActiveTab =
+  | "whiteboard"
+  | "diagrams"
+  | "documents"
+  | "web"
+  | "map";
+
 /** Request body for /api/chat and /api/vision. */
 export interface ChatRequest {
   sessionId: string;
@@ -192,6 +212,174 @@ export interface ChatRequest {
     aboutYou: string;
     howToRespond: string;
   };
+  /**
+   * Snapshot of the workspace UI (active tab, theme, canvas colors, etc.).
+   * Injected into the system prompt so Seneca can act sensibly when vision
+   * is off.
+   */
+  workspaceContext?: WorkspaceContext;
+}
+
+export type WorkspaceVisionMode = "off" | "once" | "locked";
+
+/** Visible whiteboard region in scene coordinates (derived from scroll + zoom). */
+export interface WorkspaceViewportBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Compact summary of one on-canvas element for the system prompt. */
+export interface WorkspaceSceneElementDigest {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text?: string;
+  strokeColor?: string;
+}
+
+export interface WorkspaceWhiteboardContext {
+  backgroundColor: string;
+  recommendedStrokeColor: string;
+  elementCount: number;
+  viewport?: WorkspaceViewportBounds;
+  /** Up to 20 elements, most recently placed last. */
+  elements?: WorkspaceSceneElementDigest[];
+}
+
+export interface WorkspaceMapPinDigest {
+  lat: number;
+  lng: number;
+  label?: string;
+}
+
+export interface WorkspaceMapContext {
+  center: [number, number];
+  zoom: number;
+  layer: MapLayer;
+  pinCount: number;
+  shapeCount: number;
+  pins?: WorkspaceMapPinDigest[];
+}
+
+export interface WorkspaceDocumentDigest {
+  id: string;
+  name: string;
+  textStatus?: DocumentTextStatus;
+  indexStatus?: DocumentIndexStatus;
+  origin?: DocumentOrigin;
+}
+
+export interface WorkspaceDocumentsContext {
+  activeDocumentId: string | null;
+  activeDocumentName: string | null;
+  activePage: number | null;
+  pageCount: number | null;
+  loadedDocumentNames: string[];
+  documents?: WorkspaceDocumentDigest[];
+}
+
+export interface WorkspaceWebContext {
+  url: string | null;
+  /** True when the search-results overlay is showing instead of a page. */
+  searchOverlayOpen?: boolean;
+}
+
+export interface WorkspaceDiagramVertexDigest {
+  id: string;
+  label: string;
+  shape?: string;
+}
+
+export interface WorkspaceDiagramEdgeDigest {
+  id: string;
+  from: string;
+  to: string;
+  label?: string;
+}
+
+export interface WorkspaceDiagramsContext {
+  cellCount: number;
+  /** Up to 20 truncated mxCell labels for the system prompt. */
+  labelDigest: string[];
+  hasContent: boolean;
+  vertexCount?: number;
+  edgeCount?: number;
+  vertices?: WorkspaceDiagramVertexDigest[];
+  edges?: WorkspaceDiagramEdgeDigest[];
+  bounds?: { x: number; y: number; w: number; h: number };
+}
+
+/** Re-exported graph types for tool results (defined in diagramGraph.ts). */
+export type { DiagramVertex, DiagramEdge, DiagramBounds } from "./diagramGraph.js";
+
+export interface DiagramGraphDiffResult {
+  addedVertices: string[];
+  removedVertices: string[];
+  addedEdges: string[];
+  removedEdges: string[];
+  labelChanges: { id: string; from: string; to: string }[];
+}
+
+/** Structured feedback after client diagram tool dispatch. */
+export interface DiagramToolResult {
+  cellCount: number;
+  hasContent: boolean;
+  labels: string[];
+  merged?: boolean;
+  cleared?: boolean;
+  diff?: DiagramGraphDiffResult;
+  warnings?: string[];
+  bounds?: { x: number; y: number; w: number; h: number };
+  error?: string;
+}
+
+/** Server `diagram_read` tool result shape. */
+export interface DiagramReadResult {
+  empty: boolean;
+  cellCount: number;
+  vertices: DiagramVertex[];
+  edges: DiagramEdge[];
+  bounds?: { x: number; y: number; w: number; h: number };
+  warnings: string[];
+  mermaid?: string;
+}
+
+export interface WorkspaceVoiceContext {
+  mode: "idle" | "listening" | "speaking" | "thinking";
+  muted: boolean;
+}
+
+export interface WorkspaceContext {
+  activeTab: ActiveTab;
+  vision: WorkspaceVisionMode;
+  uiTheme: "light" | "dark";
+  whiteboard: WorkspaceWhiteboardContext;
+  map?: WorkspaceMapContext;
+  documents?: WorkspaceDocumentsContext;
+  web?: WorkspaceWebContext;
+  diagrams?: WorkspaceDiagramsContext;
+  voice?: WorkspaceVoiceContext;
+  /** Set when vision was armed but the snapshot failed for this turn. */
+  visionCaptureFailed?: boolean;
+}
+
+/** Structured feedback after `whiteboard_add_element` dispatches on the client. */
+export interface WhiteboardPlacementResult {
+  elementId: string;
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text?: string;
+  appliedStrokeColor: string;
+  /** Human-readable layout warnings (clipping, off-screen, etc.). */
+  warnings?: string[];
 }
 
 /** Persisted whiteboard scene shape we store as JSONB. Wraps Excalidraw's scene. */
@@ -457,6 +645,7 @@ export interface SessionRecord {
   name: string;
   transcript: TranscriptMessage[];
   whiteboard: WhiteboardState;
+  diagrams: DiagramsState;
   map: MapState;
   web: WebState;
   documents: DocumentsState;
@@ -472,6 +661,8 @@ export interface SessionRecord {
    * rows that pre-date the migration; treat `undefined` as `false`.
    */
   pinned?: boolean;
+  /** Last focused canvas tab; defaults to whiteboard when absent. */
+  activeTab?: ActiveTab;
   created_at: string;
   updated_at: string;
 }

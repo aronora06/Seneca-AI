@@ -1,10 +1,12 @@
 import { useCallback, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../../auth/AuthProvider";
 import { readPrefs, writePrefs } from "../../../lib/userPreferences";
 import { PanelIntro, Section } from "./_shared";
 
 export function ProfilePanel() {
+  const navigate = useNavigate();
   const { user, signOut, bypass } = useAuth();
   const [displayName, setDisplayName] = useState(() => readPrefs().displayName);
 
@@ -42,7 +44,11 @@ export function ProfilePanel() {
         <div className="border-t border-border pt-4">
           <button
             type="button"
-            onClick={() => void signOut()}
+            onClick={() => {
+              void signOut().then(() => {
+                navigate("/login", { replace: true });
+              });
+            }}
             className="btn-soft text-danger"
           >
             Sign out

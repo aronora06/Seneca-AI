@@ -532,7 +532,7 @@ export function DocumentTab() {
   return (
     <div
       ref={containerRef}
-      className="relative flex h-full w-full flex-col bg-surface"
+      className="relative flex h-full w-full flex-col bg-transparent"
     >
       <DocumentToolbar
         document={activeDoc}
@@ -566,7 +566,7 @@ export function DocumentTab() {
             onDelete={remove}
           />
         )}
-        <main className="relative flex-1 overflow-hidden bg-surface-sunk/40">
+        <main className="relative flex-1 overflow-hidden bg-transparent">
           {items.length === 0 ? (
             <DocumentDropZone uploading={uploading} onUpload={upload} />
           ) : (

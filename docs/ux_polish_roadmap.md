@@ -1,6 +1,6 @@
 # Seneca — Pre-Production UX Polish Roadmap
 
-Six sequential landings that take Seneca from "MVP feature-complete" to "ready for a public pilot." Each phase is a vertical slice — finish fully before the next. Every phase ships behind a clean fallback so the product still works in dev-bypass mode with no third-party keys.
+Eight sequential landings (Phases A–H) that take Seneca from "MVP feature-complete" to "ready for a public pilot." Each phase is a vertical slice — finish fully before the next. Every phase ships behind a clean fallback so the product still works in dev-bypass mode with no third-party keys.
 
 Estimates are calendar-day sized for one engineer working linearly. Visible user value lands at the end of every phase.
 
@@ -152,7 +152,7 @@ We ship ElevenLabs as the primary path and keep browser TTS as the fallback. Rep
 - **Health + readiness endpoints**: `/api/health` already exists; add `/api/ready` that probes Anthropic + Supabase + Voyage (configurable).
 - **Smoke-test CI job** (nightly, separate from PR CI): runs against a deployed preview environment, hits `/api/health`, posts a known-cheap prompt, asserts a sane response.
 - **Privacy policy + ToS stub pages** under `/legal/privacy` and `/legal/terms`. Even one-page versions unlock public deploy.
-- **Login screen polish**: add a hero image / animation, the product tagline from vision.md, and an "About" link to a small landing copy. Today's login page is bare-bones.
+- **Login screen polish**: ~~add an "About" link~~ — done via `/` marketing home and `/about`. Still optional: hero image / animation on login or home (`apps/web/src/assets/images/hero-background.png`).
 - **Onboarding tour** for first-time users: a 4-step coachmark sequence (1) voice pane, (2) canvas tabs, (3) vision toggle, (4) sessions. Skippable. Built with a 50-line Popover component; no new dependency.
 - **Toast notifications** for transient successes / non-blocking errors (whiteboard saved, document indexed, etc.) — today these are silent or live in red `SystemBubble`s that are too heavy. One new component, one new store slice, ~80 LoC.
 - **Keyboard shortcut overlay** (Cmd/Ctrl+/) listing every shortcut. Already scaffolded in `ShortcutsPanel`; wire it to a global keymap.
@@ -161,6 +161,60 @@ We ship ElevenLabs as the primary path and keep browser TTS as the fallback. Rep
 **Tests:** rate-limit middleware (200 → 429 cutoff), cost-cap path, smoke-test script, axe-core fail on missing ARIA.
 
 **Exit criteria:** a Lighthouse a11y score ≥ 95, no Sentry-uncaught exceptions in a 10-turn dogfood session, rate limits + cost cap measurable from the network panel.
+
+---
+
+## Phase H — Environment intelligence (vision-off context) (~2 days) ✅ Shipped
+
+**Goal:** Seneca should know what's on the canvas — active tab, theme, board colours, visible elements, map pins, loaded docs — even when the user keeps the eye off. Whiteboard text should not clip and strokes should stay readable on light boards.
+
+**What landed:**
+
+- **`workspaceContext` on every chat turn** — client builds a structured snapshot in `apps/web/src/lib/workspaceContext.ts`; API injects it as `<workspace_context>` via `formatWorkspaceContextForPrompt` in `packages/shared/src/workspaceContext.ts`. No new env vars; works in dev-bypass and real-auth.
+- **Whiteboard scene digest** — viewport bounds + up to 20 elements (type, position, size, truncated text) so Seneca can answer "what's on the board?" without vision.
+- **Contrast-aware strokes** — `readResolvedTheme` + recommended stroke colour in context; client may override low-contrast `strokeColor` from the model.
+- **Reliable text sizing** — `document.fonts.ready`, canvas `measureText` (Virgil + emoji), post-placement auto-widen, placement lint warnings in `tool_result.output`.
+- **Rich `ToolResult.output`** on the next turn for `whiteboard_add_element`, `web_search`, map mutations, `document_go_to_page` (see `docs/actions.md`).
+- **`active_tab` persistence** — `PUT /api/sessions/:id/active-tab`; Postgres column + migration in `docs/setup.md` §3.1.
+
+**Tests:** `workspaceContext.test.ts`, `whiteboardScene.test.ts`, `whiteboardActions.test.ts`, shared formatter tests.
+
+**Exit criteria:** With vision off, Seneca correctly describes the active tab, board background, and recent elements; whiteboard titles with emoji do not clip; tool outcomes (success or failure) are visible on the following turn via `tool_result`.
+
+**Known follow-ups (not in this slice):** same-turn rich tool results; optional `whiteboard_get_scene` tool; collision hints between new and existing elements.
+
+---
+
+## Phase I — Zone-based voice activity visuals (~1–2 days) ✅ shipped
+
+**Goal:** Make voice state legible at a glance — who is talking, whether Seneca is still working (not only “grey dot while thinking”), and directional motion aligned with chat layout (user right, Seneca left). Restrained motion; user can disable fancy visuals.
+
+**What landed:**
+
+- **Activity model** — [`apps/web/src/hooks/useVoiceActivity.ts`](../apps/web/src/hooks/useVoiceActivity.ts): phases `idle`, `userListening`, `userDictating`, `senecaSpeaking`, `senecaStreaming`, `senecaTooling`, `senecaThinking` with explicit priority when multiple signals are true. `useVoiceActivityFromStore` pulls `activeTurnId`, `partialText`, `pendingActionLog.length` from Zustand.
+- **Preference** — `voiceVisualEffects` (default `true`) in [`userPreferences.ts`](../apps/web/src/lib/userPreferences.ts); fancy canvas loops skipped when off or when `prefers-reduced-motion: reduce` ([`useReducedMotion.ts`](../apps/web/src/hooks/useReducedMotion.ts)).
+- **Shared drawing** — [`apps/web/src/lib/barSpectrum.ts`](../apps/web/src/lib/barSpectrum.ts) + [`BarSpectrumCanvas.tsx`](../apps/web/src/components/VoicePane/BarSpectrumCanvas.tsx) (mic, playback, procedural fallback). [`Waveform.tsx`](../apps/web/src/components/VoicePane/Waveform.tsx) is now a thin mic wrapper.
+- **Playback analyser** — [`usePlaybackAnalyser.ts`](../apps/web/src/hooks/usePlaybackAnalyser.ts) + [`playbackAudioRegistry.ts`](../apps/web/src/lib/playbackAudioRegistry.ts); ElevenLabs hook registers its `<audio>` element on mount.
+- **Zone components** — `UserSpeechIndicator`, `SenecaSpeechIndicator`, `SenecaActivityBeacon`, `CollapsedActivityIndicators`; wired in [`VoicePane.tsx`](../apps/web/src/components/VoicePane/VoicePane.tsx), [`FloatingVoiceDock.tsx`](../apps/web/src/components/VoicePane/FloatingVoiceDock.tsx). Settings toggle in [`VoicePanel.tsx`](../apps/web/src/components/Settings/panels/VoicePanel.tsx).
+- **Tests** — [`useVoiceActivity.test.ts`](../apps/web/src/hooks/useVoiceActivity.test.ts) (priority matrix).
+
+**Exit criteria (visual):** met for layout and settings. **Timing feel:** first-pass coordination shipped — see [`docs/handoff.md` §4.1](handoff.md) for what was fixed and what remains.
+
+**Closed follow-ups:**
+
+- ✅ Align `tts.speaking`, ElevenLabs fetch/queue, and `senecaSpeaking` phase (`audioActive` on `useSpeech`).
+- ✅ Conversation Mode: VAD `onSpeechEnd` debounce + STT interim drain before submit.
+- ✅ `VoiceMode` includes `"thinking"` during active turns; workspace context reflects it.
+- ✅ Echo gate / barge-in use TTS pipeline state, not audible-only `speaking`.
+
+- ✅ Tool-gap beacon shows tooling (not writing) while tools are in flight.
+- ✅ Client progressive TTS via MediaSource on `/api/tts` (blob fallback on Safari).
+- ✅ AppShell `VoiceStatusPill` (dot on mobile, label from `sm+`).
+
+**Open follow-ups (optional / future):**
+
+- ElevenLabs WebSocket path for marginal latency gains on very short utterances.
+- Redis-backed rate limits for multi-replica API deploys.
 
 ---
 
@@ -193,3 +247,6 @@ We ship ElevenLabs as the primary path and keep browser TTS as the fallback. Rep
 | D — Session UX | `apps/web/src/components/Sessions/SessionsModal.tsx`, new `apps/web/src/components/Sessions/SessionPreviewCard.tsx`, new `apps/web/src/components/Sessions/SessionsPage.tsx`, `apps/api/src/lib/sessionStore.ts`, `apps/api/src/routes/sessions.ts` |
 | E — Hybrid web | new `apps/api/src/lib/headlessRender.ts`, `apps/api/src/lib/webProxy.ts`, new `apps/api/src/routes/web.ts` (extend), `apps/web/src/components/Canvas/WebTab.tsx`, new `apps/web/src/components/Canvas/WebReaderView.tsx` |
 | F — Hardening | new `apps/api/src/middleware/rateLimit.ts`, new `apps/api/src/lib/logger.ts`, `apps/api/src/server.ts`, `apps/web/src/main.tsx`, new `apps/web/src/components/Onboarding/Tour.tsx`, new `apps/web/src/components/Toast.tsx` |
+| G — Conversation Mode | `apps/web/src/hooks/useConversationVad.ts`, `apps/web/src/lib/vadAssets.ts`, `apps/web/src/components/VoicePane/FloatingVoiceDock.tsx`, `GlobalShortcuts.tsx` |
+| H — Environment intelligence | `apps/web/src/lib/workspaceContext.ts`, `packages/shared/src/workspaceContext.ts`, `apps/web/src/lib/whiteboardScene.ts`, `apps/web/src/lib/whiteboardActions.ts`, `apps/web/src/lib/toolResultOutputs.ts`, `apps/web/src/lib/persistActiveTab.ts` |
+| I — Voice activity visuals | `apps/web/src/hooks/useVoiceActivity.ts`, `apps/web/src/components/VoicePane/*Indicator*.tsx`, `BarSpectrumCanvas.tsx`, `usePlaybackAnalyser.ts`, `VoicePane.tsx`, `FloatingVoiceDock.tsx` |

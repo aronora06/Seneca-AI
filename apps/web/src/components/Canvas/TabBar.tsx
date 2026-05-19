@@ -13,6 +13,7 @@ const TABS: Array<{
   hint?: string;
 }> = [
   { id: "whiteboard", label: "Whiteboard" },
+  { id: "diagrams", label: "Diagrams" },
   { id: "map", label: "Map" },
   { id: "web", label: "Web" },
   { id: "documents", label: "Documents" },

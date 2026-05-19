@@ -1,0 +1,513 @@
+/**
+ * Named colour palettes — each provides a full semantic token set for
+ * light and dark modes. Accents are baked into the palette so surfaces,
+ * text, and highlights feel cohesive.
+ */
+
+import { meetsTextContrast } from "./contrast";
+import type { SemanticTokens } from "./tokens";
+
+export type PaletteCategory = "professional" | "expressive";
+
+export interface ColorPalette {
+  id: string;
+  label: string;
+  description: string;
+  category: PaletteCategory;
+  /** Preview swatch for the settings grid (hex). */
+  swatch: string;
+  swatchDark: string;
+  light: SemanticTokens;
+  dark: SemanticTokens;
+}
+
+const SHARED_LIGHT_DANGER: Pick<
+  SemanticTokens,
+  "danger" | "dangerSoft" | "dangerFg" | "ok" | "okSoft"
+> = {
+  danger: "185 28 28",
+  dangerSoft: "254 226 226",
+  dangerFg: "127 29 29",
+  ok: "21 128 61",
+  okSoft: "220 252 231",
+};
+
+const SHARED_DARK_DANGER: Pick<
+  SemanticTokens,
+  "danger" | "dangerSoft" | "dangerFg" | "ok" | "okSoft"
+> = {
+  danger: "248 113 113",
+  dangerSoft: "76 29 29",
+  dangerFg: "254 226 226",
+  ok: "74 222 128",
+  okSoft: "5 46 22",
+};
+
+export const COLOR_PALETTES: ColorPalette[] = [
+  {
+    id: "parchment",
+    label: "Parchment",
+    description: "Warm ink & ember — Seneca's default",
+    category: "professional",
+    swatch: "#f8f6f1",
+    swatchDark: "#1a140e",
+    light: {
+      surface: "248 246 241",
+      surfaceSunk: "239 234 224",
+      card: "255 255 255",
+      border: "223 214 196",
+      fg: "26 20 14",
+      fgMuted: "77 63 45",
+      fgSubtle: "138 115 85",
+      fgOn: "248 246 241",
+      accent: "212 154 71",
+      accentSoft: "232 184 115",
+      accentFg: "26 20 14",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "14 10 6",
+      surfaceSunk: "26 20 14",
+      card: "30 24 17",
+      border: "51 41 29",
+      fg: "239 234 224",
+      fgMuted: "200 186 161",
+      fgSubtle: "168 147 115",
+      fgOn: "14 10 6",
+      accent: "232 184 115",
+      accentSoft: "132 100 64",
+      accentFg: "14 10 6",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "slate",
+    label: "Slate",
+    description: "Cool neutral — crisp and corporate",
+    category: "professional",
+    swatch: "#f4f6f8",
+    swatchDark: "#14181c",
+    light: {
+      surface: "244 246 248",
+      surfaceSunk: "230 234 238",
+      card: "255 255 255",
+      border: "206 214 222",
+      fg: "15 23 42",
+      fgMuted: "71 85 105",
+      fgSubtle: "100 116 139",
+      fgOn: "248 250 252",
+      accent: "71 85 105",
+      accentSoft: "148 163 184",
+      accentFg: "248 250 252",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "20 24 28",
+      surfaceSunk: "30 36 42",
+      card: "36 42 50",
+      border: "55 65 75",
+      fg: "226 232 240",
+      fgMuted: "148 163 184",
+      fgSubtle: "100 116 139",
+      fgOn: "15 23 42",
+      accent: "148 163 184",
+      accentSoft: "71 85 105",
+      accentFg: "15 23 42",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "navy",
+    label: "Navy",
+    description: "Deep blue-gray — boardroom calm",
+    category: "professional",
+    swatch: "#eef2f7",
+    swatchDark: "#0c1220",
+    light: {
+      surface: "238 242 247",
+      surfaceSunk: "220 228 238",
+      card: "255 255 255",
+      border: "190 204 220",
+      fg: "15 28 46",
+      fgMuted: "51 65 85",
+      fgSubtle: "100 116 139",
+      fgOn: "248 250 252",
+      accent: "37 99 168",
+      accentSoft: "96 165 220",
+      accentFg: "248 250 252",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "12 18 32",
+      surfaceSunk: "22 30 48",
+      card: "28 36 56",
+      border: "45 58 82",
+      fg: "226 232 240",
+      fgMuted: "148 163 184",
+      fgSubtle: "100 116 139",
+      fgOn: "12 18 32",
+      accent: "96 165 220",
+      accentSoft: "37 99 168",
+      accentFg: "12 18 32",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "forest",
+    label: "Forest",
+    description: "Muted sage — natural and focused",
+    category: "professional",
+    swatch: "#f2f6f2",
+    swatchDark: "#101814",
+    light: {
+      surface: "242 246 242",
+      surfaceSunk: "228 236 228",
+      card: "255 255 255",
+      border: "196 214 196",
+      fg: "18 32 24",
+      fgMuted: "55 75 62",
+      fgSubtle: "95 115 100",
+      fgOn: "248 250 248",
+      accent: "61 110 78",
+      accentSoft: "120 165 130",
+      accentFg: "248 250 248",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "16 24 20",
+      surfaceSunk: "26 36 30",
+      card: "32 44 36",
+      border: "48 62 52",
+      fg: "230 240 232",
+      fgMuted: "160 185 168",
+      fgSubtle: "110 130 115",
+      fgOn: "16 24 20",
+      accent: "130 175 140",
+      accentSoft: "61 110 78",
+      accentFg: "16 24 20",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "stone",
+    label: "Stone",
+    description: "Warm gray — minimal and steady",
+    category: "professional",
+    swatch: "#f5f3f0",
+    swatchDark: "#1c1917",
+    light: {
+      surface: "245 243 240",
+      surfaceSunk: "231 227 222",
+      card: "255 255 255",
+      border: "214 207 196",
+      fg: "28 25 23",
+      fgMuted: "87 83 78",
+      fgSubtle: "120 113 108",
+      fgOn: "250 250 249",
+      accent: "120 113 108",
+      accentSoft: "168 162 158",
+      accentFg: "250 250 249",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "28 25 23",
+      surfaceSunk: "41 37 36",
+      card: "48 44 42",
+      border: "68 64 60",
+      fg: "250 250 249",
+      fgMuted: "168 162 158",
+      fgSubtle: "120 113 108",
+      fgOn: "28 25 23",
+      accent: "168 162 158",
+      accentSoft: "87 83 78",
+      accentFg: "28 25 23",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "burgundy",
+    label: "Burgundy",
+    description: "Rich wine tones — editorial gravitas",
+    category: "professional",
+    swatch: "#f8f4f4",
+    swatchDark: "#1a1014",
+    light: {
+      surface: "248 244 244",
+      surfaceSunk: "238 228 228",
+      card: "255 255 255",
+      border: "220 200 200",
+      fg: "40 18 24",
+      fgMuted: "92 58 68",
+      fgSubtle: "140 100 110",
+      fgOn: "252 248 248",
+      accent: "140 58 78",
+      accentSoft: "185 120 135",
+      accentFg: "252 248 248",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "26 16 20",
+      surfaceSunk: "40 26 32",
+      card: "48 32 38",
+      border: "72 48 56",
+      fg: "248 240 242",
+      fgMuted: "200 170 178",
+      fgSubtle: "150 115 125",
+      fgOn: "26 16 20",
+      accent: "200 130 145",
+      accentSoft: "120 60 75",
+      accentFg: "26 16 20",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "sunset",
+    label: "Sunset",
+    description: "Peach & coral glow — warm energy",
+    category: "expressive",
+    swatch: "#fff8f3",
+    swatchDark: "#1f1410",
+    light: {
+      surface: "255 248 243",
+      surfaceSunk: "255 235 220",
+      card: "255 255 255",
+      border: "245 210 185",
+      fg: "62 32 22",
+      fgMuted: "120 72 52",
+      fgSubtle: "170 115 90",
+      fgOn: "255 252 248",
+      accent: "220 100 70",
+      accentSoft: "245 165 130",
+      accentFg: "62 32 22",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "31 20 16",
+      surfaceSunk: "48 30 24",
+      card: "58 38 30",
+      border: "90 55 42",
+      fg: "255 240 230",
+      fgMuted: "220 175 155",
+      fgSubtle: "180 130 110",
+      fgOn: "31 20 16",
+      accent: "245 150 110",
+      accentSoft: "180 85 60",
+      accentFg: "31 20 16",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "lavender",
+    label: "Lavender",
+    description: "Soft violet — creative and calm",
+    category: "expressive",
+    swatch: "#f7f4fc",
+    swatchDark: "#18141f",
+    light: {
+      surface: "247 244 252",
+      surfaceSunk: "235 228 248",
+      card: "255 255 255",
+      border: "210 198 230",
+      fg: "35 25 55",
+      fgMuted: "85 70 115",
+      fgSubtle: "130 115 160",
+      fgOn: "252 250 255",
+      accent: "130 95 185",
+      accentSoft: "185 165 220",
+      accentFg: "35 25 55",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "24 20 31",
+      surfaceSunk: "38 32 48",
+      card: "48 40 58",
+      border: "68 58 82",
+      fg: "240 235 252",
+      fgMuted: "190 175 215",
+      fgSubtle: "140 125 165",
+      fgOn: "24 20 31",
+      accent: "185 155 230",
+      accentSoft: "110 80 160",
+      accentFg: "24 20 31",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "mint",
+    label: "Mint",
+    description: "Fresh teal — bright and optimistic",
+    category: "expressive",
+    swatch: "#f0faf8",
+    swatchDark: "#0e1a18",
+    light: {
+      surface: "240 250 248",
+      surfaceSunk: "220 242 238",
+      card: "255 255 255",
+      border: "180 220 212",
+      fg: "12 40 36",
+      fgMuted: "45 95 88",
+      fgSubtle: "90 140 132",
+      fgOn: "248 255 252",
+      accent: "20 150 130",
+      accentSoft: "90 200 185",
+      accentFg: "12 40 36",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "14 26 24",
+      surfaceSunk: "24 40 36",
+      card: "30 50 46",
+      border: "45 72 66",
+      fg: "230 250 246",
+      fgMuted: "150 200 190",
+      fgSubtle: "100 150 142",
+      fgOn: "14 26 24",
+      accent: "90 210 190",
+      accentSoft: "30 130 115",
+      accentFg: "14 26 24",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "rose",
+    label: "Rose",
+    description: "Dusty pink — gentle and inviting",
+    category: "expressive",
+    swatch: "#fdf6f8",
+    swatchDark: "#1f1418",
+    light: {
+      surface: "253 246 248",
+      surfaceSunk: "248 230 236",
+      card: "255 255 255",
+      border: "235 200 210",
+      fg: "50 22 32",
+      fgMuted: "110 65 80",
+      fgSubtle: "160 115 128",
+      fgOn: "255 250 252",
+      accent: "200 90 120",
+      accentSoft: "235 165 185",
+      accentFg: "50 22 32",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "31 20 24",
+      surfaceSunk: "48 30 36",
+      card: "58 38 44",
+      border: "85 55 65",
+      fg: "252 240 244",
+      fgMuted: "215 170 182",
+      fgSubtle: "170 125 138",
+      fgOn: "31 20 24",
+      accent: "235 140 165",
+      accentSoft: "165 75 100",
+      accentFg: "31 20 24",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "aurora",
+    label: "Aurora",
+    description: "Indigo & teal — cosmic night",
+    category: "expressive",
+    swatch: "#f2f4fc",
+    swatchDark: "#0c1020",
+    light: {
+      surface: "242 244 252",
+      surfaceSunk: "228 232 248",
+      card: "255 255 255",
+      border: "195 200 230",
+      fg: "20 22 48",
+      fgMuted: "60 65 110",
+      fgSubtle: "110 115 155",
+      fgOn: "248 250 255",
+      accent: "88 80 200",
+      accentSoft: "140 130 230",
+      accentFg: "248 250 255",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "12 16 32",
+      surfaceSunk: "22 28 48",
+      card: "28 34 58",
+      border: "45 55 85",
+      fg: "235 238 255",
+      fgMuted: "170 175 215",
+      fgSubtle: "120 125 165",
+      fgOn: "12 16 32",
+      accent: "120 200 220",
+      accentSoft: "80 100 200",
+      accentFg: "12 16 32",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+  {
+    id: "citrus",
+    label: "Citrus",
+    description: "Golden lime — playful sunshine",
+    category: "expressive",
+    swatch: "#fafcf0",
+    swatchDark: "#1a1c10",
+    light: {
+      surface: "250 252 240",
+      surfaceSunk: "240 245 220",
+      card: "255 255 255",
+      border: "215 225 175",
+      fg: "32 38 12",
+      fgMuted: "75 88 35",
+      fgSubtle: "120 135 70",
+      fgOn: "252 255 248",
+      accent: "160 175 40",
+      accentSoft: "200 215 90",
+      accentFg: "32 38 12",
+      ...SHARED_LIGHT_DANGER,
+    },
+    dark: {
+      surface: "26 28 16",
+      surfaceSunk: "40 42 26",
+      card: "50 52 32",
+      border: "72 75 48",
+      fg: "248 252 235",
+      fgMuted: "195 205 140",
+      fgSubtle: "145 155 95",
+      fgOn: "26 28 16",
+      accent: "210 220 80",
+      accentSoft: "130 145 45",
+      accentFg: "26 28 16",
+      ...SHARED_DARK_DANGER,
+    },
+  },
+];
+
+export const DEFAULT_PALETTE_ID = "parchment";
+
+export function getPalette(id: string): ColorPalette {
+  return COLOR_PALETTES.find((p) => p.id === id) ?? COLOR_PALETTES[0]!;
+}
+
+export function resolvePaletteTokens(
+  paletteId: string,
+  mode: "light" | "dark",
+  overrides: Partial<SemanticTokens> | null | undefined,
+): SemanticTokens {
+  const palette = getPalette(paletteId);
+  const base = mode === "dark" ? palette.dark : palette.light;
+  return overrides ? { ...base, ...overrides } : { ...base };
+}
+
+/** Dev-time sanity check — palettes should meet AA on primary text. */
+export function validatePalettes(): void {
+  if (import.meta.env.PROD) return;
+  for (const p of COLOR_PALETTES) {
+    for (const mode of ["light", "dark"] as const) {
+      const t = mode === "light" ? p.light : p.dark;
+      if (!meetsTextContrast(t.fg, t.surface)) {
+        console.warn(`[palettes] ${p.id} ${mode}: fg/surface below WCAG AA`);
+      }
+      if (!meetsTextContrast(t.fgMuted, t.surface)) {
+        console.warn(`[palettes] ${p.id} ${mode}: fgMuted/surface below AA`);
+      }
+    }
+  }
+}
+
+validatePalettes();

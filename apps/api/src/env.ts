@@ -28,6 +28,14 @@ function bool(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(v.trim());
 }
 
+function num(name: string, fallback: number): number {
+  const v = process.env[name];
+  if (v === undefined || v.trim() === "") return fallback;
+  const parsed = Number(v);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed;
+}
+
 const devBypassAuth = bool("DEV_BYPASS_AUTH", false);
 
 export const env = {
@@ -78,6 +86,22 @@ export const env = {
   elevenLabsApiKey: optional("ELEVENLABS_API_KEY", ""),
   elevenLabsDefaultVoiceId: optional("ELEVENLABS_DEFAULT_VOICE_ID", ""),
   elevenLabsModelId: optional("ELEVENLABS_MODEL_ID", "eleven_turbo_v2_5"),
+
+  /**
+   * Phase F — per-user hourly budget for expensive routes. Each route
+   * picks a budget multiplier (chat/vision = 1×, tts = 2×, render = 0.5×)
+   * so a single env var is all an operator needs to tune in practice.
+   * Set to 0 to disable rate limiting entirely (handy for tests).
+   */
+  rateLimitTurnsPerHour: num("RATE_LIMIT_TURNS_PER_HOUR", 60),
+  /**
+   * Phase F — hard cost cap per user per day (USD). When exceeded,
+   * /api/chat refuses to start a new turn and returns 403 with
+   * `code: "cost_capped"`. Resets at midnight UTC. Set to 0 to
+   * disable; default is generous for a single-user dogfooding
+   * scenario.
+   */
+  costCapUsdPerDay: num("COST_CAP_USD_PER_DAY", 5),
 
   supabaseUrl: devBypassAuth
     ? optional("SUPABASE_URL", "")

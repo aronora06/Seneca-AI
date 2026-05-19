@@ -32,7 +32,7 @@ import { createPortal } from "react-dom";
 import clsx from "clsx";
 
 import type { SessionUsage } from "@seneca/shared";
-import { DEFAULT_SESSION_USAGE } from "@seneca/shared";
+import { DEFAULT_DIAGRAMS_STATE, DEFAULT_SESSION_USAGE } from "@seneca/shared";
 
 import { useSenecaStore } from "../../store/seneca";
 import {
@@ -51,6 +51,7 @@ import {
   normalizeWeb,
 } from "../../lib/sessionNormalizers";
 import { downloadSessionMarkdown } from "../../lib/sessionExport";
+import { toast } from "../Toast/toastStore";
 
 interface Props {
   open: boolean;
@@ -132,9 +133,13 @@ export function SessionsModal({ open, onClose }: Props) {
             row.whiteboard && Object.keys(row.whiteboard).length > 0
               ? row.whiteboard
               : { elements: [] },
+          diagrams: row.diagrams?.xml
+            ? row.diagrams
+            : { ...DEFAULT_DIAGRAMS_STATE },
           map: normalizeMap(row.map),
           web: normalizeWeb(row.web),
           documents: normalizeDocuments(row.documents),
+          activeTab: row.activeTab ?? "whiteboard",
         });
         // loadSession clears usage; hydrate from the row immediately
         // after so the cost pill picks up the persisted total.
@@ -164,9 +169,13 @@ export function SessionsModal({ open, onClose }: Props) {
             row.whiteboard && Object.keys(row.whiteboard).length > 0
               ? row.whiteboard
               : { elements: [] },
+          diagrams: row.diagrams?.xml
+            ? row.diagrams
+            : { ...DEFAULT_DIAGRAMS_STATE },
           map: normalizeMap(row.map),
           web: normalizeWeb(row.web),
           documents: normalizeDocuments(row.documents),
+          activeTab: row.activeTab ?? "whiteboard",
         });
         setActiveDialog({ kind: "none" });
         onClose();
@@ -203,8 +212,14 @@ export function SessionsModal({ open, onClose }: Props) {
   const handleDelete = useCallback(
     async (id: string) => {
       setBusy(`delete:${id}`);
+      const target = sessions?.find((s) => s.id === id);
+      const deletedName = target?.name ?? "Session";
       try {
         await deleteSession(id);
+        toast.info({
+          title: `Deleted "${deletedName}"`,
+          description: "Transcript and attached state are gone.",
+        });
         setActiveDialog({ kind: "none" });
         if (id === sessionId) {
           const remaining = (sessions ?? []).filter((s) => s.id !== id);
@@ -217,9 +232,11 @@ export function SessionsModal({ open, onClose }: Props) {
               name: row.name,
               transcript: [],
               whiteboard: { elements: [] },
+              diagrams: { ...DEFAULT_DIAGRAMS_STATE },
               map: normalizeMap(row.map),
               web: normalizeWeb(row.web),
               documents: normalizeDocuments(row.documents),
+              activeTab: row.activeTab ?? "whiteboard",
             });
             onClose();
           }
@@ -265,8 +282,17 @@ export function SessionsModal({ open, onClose }: Props) {
     try {
       const row = await fetchSessionRow(id);
       downloadSessionMarkdown(row);
+      toast.success({
+        title: "Session exported",
+        description: `Saved ${row.name || "session"} as Markdown.`,
+      });
     } catch (err) {
-      setExportError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setExportError(msg);
+      toast.error({
+        title: "Export failed",
+        description: msg,
+      });
     } finally {
       setBusy(null);
     }
@@ -615,6 +641,8 @@ function tabIcon(tab: SessionTabFlag): string {
       return "◯";
     case "whiteboard":
       return "▦";
+    case "diagrams":
+      return "◇";
   }
 }
 
@@ -628,6 +656,8 @@ function tabLabel(tab: SessionTabFlag): string {
       return "Map";
     case "whiteboard":
       return "Board";
+    case "diagrams":
+      return "Diagrams";
   }
 }
 

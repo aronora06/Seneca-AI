@@ -12,7 +12,7 @@
 
 import clsx from "clsx";
 
-import type { AccentPalette } from "../../../theme/accents";
+import type { ColorPalette } from "../../../theme/palettes";
 import type { ResolvedTheme, ThemeChoice } from "../../../theme/ThemeProvider";
 import type { BackgroundStyle, FontSize } from "../../../lib/userPreferences";
 
@@ -110,53 +110,58 @@ export function ThemePreviewCard(props: {
   );
 }
 
-// ── Accent preview ──────────────────────────────────────────────────
-//
-// Each card is a self-contained sample of that accent: a coloured "Aa"
-// puck on top of a soft accent-tinted background. Clicking applies it
-// globally — and because the active card uses border-accent, it will
-// instantly snap to its own colour after the click.
+// ── Colour palette preview ───────────────────────────────────────────
 
-export function AccentPreviewCard(props: {
-  preset: AccentPalette;
+export function PalettePreviewCard(props: {
+  palette: ColorPalette;
   resolved: ResolvedTheme;
   active: boolean;
   onClick: () => void;
 }) {
-  const { preset, resolved, active, onClick } = props;
-  const c = resolved === "dark" ? preset.dark : preset.light;
-  const accent = `rgb(${c.accent})`;
-  const accentFg = `rgb(${c.accentFg})`;
-  const accentSoft = `rgb(${c.accentSoft})`;
+  const { palette, resolved, active, onClick } = props;
+  const t = resolved === "dark" ? palette.dark : palette.light;
   return (
     <button
       type="button"
       onClick={onClick}
-      title={preset.label}
+      title={palette.description}
       role="radio"
       aria-checked={active}
       className={clsx(
-        "group flex flex-col items-center gap-1.5 rounded-lg border bg-card p-2 transition-all",
+        "flex flex-col gap-2 rounded-lg border p-2 text-left transition-all",
         active
-          ? "border-fg shadow-soft"
+          ? "border-accent bg-accent/5 ring-2 ring-accent/30"
           : "border-border hover:border-fg-subtle",
       )}
     >
       <div
-        className="relative flex h-10 w-full items-center justify-center overflow-hidden rounded"
-        style={{
-          backgroundColor: accentSoft,
-          opacity: 0.65,
-        }}
+        className="flex h-14 w-full overflow-hidden rounded border border-border"
+        aria-hidden
       >
-        <span
-          className="flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold leading-none shadow-soft"
-          style={{ backgroundColor: accent, color: accentFg }}
+        <div
+          className="flex flex-1 flex-col justify-end gap-1 p-1.5"
+          style={{ backgroundColor: `rgb(${t.surface})` }}
         >
-          Aa
-        </span>
+          <span
+            className="h-1 w-3/4 rounded-full"
+            style={{ backgroundColor: `rgb(${t.fg})`, opacity: 0.85 }}
+          />
+          <span
+            className="h-1.5 w-4 rounded-full"
+            style={{ backgroundColor: `rgb(${t.accent})` }}
+          />
+        </div>
+        <div
+          className="w-5 shrink-0 border-l border-border"
+          style={{ backgroundColor: `rgb(${t.card})` }}
+        />
       </div>
-      <span className="text-[11px] font-medium text-fg">{preset.label}</span>
+      <div className="px-0.5">
+        <div className="text-xs font-medium text-fg">{palette.label}</div>
+        <div className="line-clamp-1 text-[10px] text-fg-subtle">
+          {palette.description}
+        </div>
+      </div>
     </button>
   );
 }

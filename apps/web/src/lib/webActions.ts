@@ -56,7 +56,9 @@ export async function applyWebNavigate(input: WebNavigateInput): Promise<void> {
   await requireWebApi().navigate(input.url);
 }
 
-export async function applyWebSearch(input: WebSearchInput): Promise<void> {
+export async function applyWebSearch(
+  input: WebSearchInput,
+): Promise<WebSearchResult[]> {
   const api = requireWebApi();
   let body: { results: WebSearchResult[] };
   try {
@@ -72,7 +74,9 @@ export async function applyWebSearch(input: WebSearchInput): Promise<void> {
     }
     throw err;
   }
-  api.showSearchResults(input.query, body.results);
+  const results = body.results ?? [];
+  api.showSearchResults(input.query, results);
+  return results;
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────

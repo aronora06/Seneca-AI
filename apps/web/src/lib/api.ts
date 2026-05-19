@@ -240,12 +240,18 @@ export async function apiStream(
 
   try {
     while (true) {
+      if (handlers.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
       let sepIndex: number;
       while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {
+        if (handlers.signal?.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
         const chunk = buffer.slice(0, sepIndex);
         buffer = buffer.slice(sepIndex + 2);
         const event = parseSseChunk(chunk);

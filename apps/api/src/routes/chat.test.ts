@@ -11,6 +11,7 @@ import { documentTextStore } from "../lib/documentTextStore.js";
 
 const {
   buildAnthropicMessages,
+  buildSystemPrompt,
   clampPage,
   clampMaxChars,
   clampTopK,
@@ -71,6 +72,24 @@ describe("clampTopK", () => {
   it("accepts in-range values, flooring", () => {
     expect(clampTopK(7)).toBe(7);
     expect(clampTopK(3.9)).toBe(3);
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  it("appends workspace context when provided", () => {
+    const prompt = buildSystemPrompt(undefined, {
+      activeTab: "whiteboard",
+      vision: "off",
+      uiTheme: "light",
+      whiteboard: {
+        backgroundColor: "#f8f6f1",
+        recommendedStrokeColor: "#1e1e1e",
+        elementCount: 0,
+      },
+    });
+    expect(prompt).toContain("<workspace_context>");
+    expect(prompt).toContain("#f8f6f1");
+    expect(prompt).toContain("warm off-white");
   });
 });
 

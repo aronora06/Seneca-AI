@@ -134,6 +134,21 @@ Without the key, `/api/tts/config` reports `available: false`, the picker stays 
 
 > Cost telemetry: ElevenLabs bills per character. The web client tracks usage in the session's `usage.ttsCharacters` and `usage.ttsCostUSD` fields and the cost pill tooltip shows the running TTS spend alongside Anthropic.
 
+**Streaming playback:** The API streams MP3 bytes from ElevenLabs without buffering the full file server-side. The web client appends chunks through **MediaSource** as they arrive so audio can start before the sentence finishes downloading. Browsers without MSE + `audio/mpeg` support (some Safari builds) fall back to waiting for the full blob — behaviour is unchanged from the pre-streaming path, just slightly higher latency.
+
+**Debugging voice timing:** If spoken output lags behind the transcript or plays stale lines from an earlier part of the turn, enable the TTS timeline logger:
+
+1. Open DevTools → Console.
+2. Run `senecaEnableTtsDebug()` (or `localStorage.setItem('seneca:ttsDebug', '1')`).
+3. Reload the page.
+4. Filter the console by `[seneca:tts]`.
+
+Each log row includes `ms` (milliseconds since page load) so you can compare `user.submit`, `runTurn.textVisible` (on-screen text), `runTurn.onSpoken` / `speak.enqueue`, `pump.play` / `playback.start`, and `runTurn.toolStart` (tool boundary). Share a short capture if timing still looks wrong.
+
+**Voice interrupt during playback:** In legacy **Continuous** + **Hands-free** mode (Conversation Mode off), the speech recognizer is muted while Seneca speaks so your laptop mic does not echo his voice back as false input. **Silero VAD** (`vadEnabled` in Settings → Voice & Audio, on by default) still listens and triggers barge-in when you talk over him. **Conversation Mode** is the recommended path for full hands-free turn-taking. You can always **type and Send** mid-turn or use **Skip** to stop audio and cancel the in-flight reply.
+
+**Multi-instance deploys:** Rate limits and cost caps are **in-process per API instance** today. If you run more than one replica behind a load balancer, plan a Redis-backed limiter so per-user TTS/chat budgets stay global — see §2.9 rate limits.
+
 ---
 
 ## 2.8 Optional: enable live web rendering (headless Chromium)
@@ -165,6 +180,65 @@ Without `playwright-core` installed, `/api/web/render/config` reports `{ headles
 
 ---
 
+## 2.9 Optional: tune rate limits and the daily cost cap
+
+Phase F adds two safety knobs on every expensive route. They live in `apps/api/.env`:
+
+```env
+# Phase F — per-user hourly rate limit on the expensive routes.
+# Each route picks a multiplier from this base (chat × 1, vision × 1,
+# tts × 2, render × 0.5). Set to 0 to disable.
+RATE_LIMIT_TURNS_PER_HOUR=60
+
+# Phase F — per-user per-day USD cost cap on /api/chat and /api/vision.
+# Resets at UTC midnight. Set to 0 to disable. The default is generous
+# for a single-user dogfooding deploy.
+COST_CAP_USD_PER_DAY=5
+
+# Phase F — JSON-line logger verbosity. Defaults to "info"; bump to
+# "debug" for noisy request tracing or "warn"/"error" for a quieter
+# production deploy.
+LOG_LEVEL=info
+```
+
+When a request trips the rate limiter it returns 429 + `Retry-After`. When a user trips the daily cost cap, `/api/chat` returns 403 with `code: "cost_capped"`. Both surface in the transcript as readable system notices on the web side.
+
+Wire your deploy platform's readiness check at `GET /api/ready` — it reports each integration's configured state without making outbound calls.
+
+---
+
+## 2.10 Optional: self-host the Conversation-Mode VAD assets
+
+Phase G — Conversation Mode — uses [Silero VAD](https://github.com/snakers4/silero-vad) running in the browser via `@ricky0123/vad-web` and `onnxruntime-web`. On first use, Seneca downloads three families of files from the jsDelivr CDN:
+
+1. The AudioWorklet bundle (`vad.worklet.bundle.min.js`, ~50 KB).
+2. The Silero ONNX model (`silero_vad_v5.onnx`, ~2 MB).
+3. The ONNX-runtime WebAssembly binaries (~3–5 MB depending on browser).
+
+Total ~5 MB on the first session that flips Conversation Mode on. Cached in the browser after that.
+
+If your deployment forbids fetching from jsDelivr (strict CSP, on-prem, air-gapped), copy the files into `apps/web/public/vad/` and `apps/web/public/ort/` respectively, then set:
+
+```env
+# In apps/web/.env
+VITE_VAD_BASE_PATH=/vad/
+VITE_VAD_ONNX_WASM_PATH=/ort/
+```
+
+The Vite build will serve them at those paths. The file lists you need are documented in [`apps/web/src/lib/vadAssets.ts`](../apps/web/src/lib/vadAssets.ts); the package versions are pinned to the installed `package.json` entries so the runtime API and the asset format never drift.
+
+Without any setup, Conversation Mode "just works" the first time you toggle it on (the user grants mic permission, model downloads, mic opens). If the model can't load — offline, CSP block, mic permission denied — the preference auto-flips back off and the user sees a toast explaining why. Push-to-talk, the legacy continuous toggle, and the text input still work; Conversation Mode is purely additive.
+
+---
+
+## 2.11 Workspace context (no configuration)
+
+**Environment intelligence** — structured canvas state sent on every chat turn — requires no API keys or env vars. The web client builds `workspaceContext` automatically; the API merges it into the system prompt. In real-auth mode, the last focused tab is persisted in `sessions.active_tab` (included in the §3.1 schema and the migration block for existing projects). Dev-bypass mode keeps `active_tab` in memory with the rest of the session.
+
+If Seneca seems unaware of what's on the board with vision off, verify you're on a build that includes Phase H (`apps/web/src/lib/workspaceContext.ts`) and, for Postgres, that `active_tab` exists on `sessions`.
+
+---
+
 ## 3. Real-auth mode (for deploying or testing real login)
 
 ### 3.1 Create a Supabase project
@@ -185,6 +259,7 @@ Without `playwright-core` installed, `/api/web/render/config` reports `{ headles
      name text not null default 'Untitled',
      transcript jsonb not null default '[]'::jsonb,
      whiteboard jsonb not null default '{}'::jsonb,
+     diagrams jsonb not null default '{"xml":"<mxGraphModel><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/></root></mxGraphModel>"}'::jsonb,
      map jsonb not null default
        '{"center":[20,0],"zoom":2,"layer":"standard","pins":[],"shapes":[]}'::jsonb,
      web jsonb not null default
@@ -198,9 +273,14 @@ Without `playwright-core` installed, `/api/web/render/config` reports `{ headles
      -- Defaults to false so existing rows light up "not pinned" without
      -- a backfill step.
      pinned boolean not null default false,
+     -- Last focused canvas tab (whiteboard | diagrams | documents | web | map).
+     active_tab text not null default 'whiteboard',
      created_at timestamptz default now(),
      updated_at timestamptz default now()
    );
+
+   -- If you created `sessions` before `active_tab` existed, run once:
+   -- alter table sessions add column if not exists active_tab text not null default 'whiteboard';
 
    alter table sessions enable row level security;
 
@@ -445,6 +525,14 @@ Without `playwright-core` installed, `/api/web/render/config` reports `{ headles
 > alter table sessions
 >   add column if not exists pinned boolean not null default false;
 >
+> -- Phase H — last focused canvas tab (whiteboard | diagrams | documents | web | map).
+> alter table sessions
+>   add column if not exists active_tab text not null default 'whiteboard';
+>
+> -- Diagrams tab (draw.io XML persisted per session).
+> alter table sessions
+>   add column if not exists diagrams jsonb not null default '{"xml":"<mxGraphModel><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/></root></mxGraphModel>"}'::jsonb;
+>
 > insert into storage.buckets (id, name, public)
 > values ('seneca-documents', 'seneca-documents', false)
 > on conflict (id) do nothing;
@@ -584,7 +672,9 @@ VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
 ```
 
-Restart `pnpm dev`. You'll now see the sign-up / sign-in screen.
+Restart `pnpm dev`. Visit `http://localhost:5173/` for the marketing home page and `http://localhost:5173/login` to sign in. After login you land on `http://localhost:5173/app` (the workspace).
+
+With dev bypass still enabled, `/` shows marketing and `/app` opens the workspace directly; `/login` redirects to `/app`.
 
 ---
 
@@ -635,11 +725,31 @@ git push -u origin main
    - `VITE_API_BASE_URL=https://YOUR-RAILWAY-DOMAIN`
 6. Deploy. Once Vercel gives you a URL, go back to Railway and set `WEB_ORIGIN` to it. Redeploy the API.
 
+The web app ships [`apps/web/vercel.json`](../apps/web/vercel.json) so deep links (`/login`, `/privacy`, `/app`, etc.) rewrite to `index.html`. Without that file, refreshing a non-root URL would 404 on Vercel.
+
+In the Supabase dashboard → **Authentication → URL configuration**, add your site URL and redirect allow-list entries, for example:
+
+- Site URL: `https://YOUR-WEB-DOMAIN.vercel.app`
+- Redirect URLs: `https://YOUR-WEB-DOMAIN.vercel.app/app`, `https://YOUR-WEB-DOMAIN.vercel.app/login`, and the same paths on `http://localhost:5173` for local real-auth testing.
+
+### Public routes
+
+| Path | Purpose |
+|------|---------|
+| `/` | Marketing home |
+| `/about` | Product overview |
+| `/privacy`, `/terms` | Legal placeholders |
+| `/login` | Sign in / sign up |
+| `/app` | Workspace (requires auth in production) |
+
+Legacy hash links (`#privacy`, `#terms`) redirect to the path-based URLs automatically.
+
 ---
 
 ## Troubleshooting
 
-- **Login page shows in dev mode**: confirm both `DEV_BYPASS_AUTH=true` (API) and `VITE_DEV_BYPASS_AUTH=true` (web), then restart `pnpm dev` so Vite re-reads the env.
+- **Login page shows in dev mode**: confirm both `DEV_BYPASS_AUTH=true` (API) and `VITE_DEV_BYPASS_AUTH=true` (web), then restart `pnpm dev` so Vite re-reads the env. With bypass on, use `/` for marketing and `/app` for the workspace; `/login` redirects to `/app`.
+- **404 on `/login` or `/app` after deploy**: confirm `apps/web/vercel.json` is present and redeploy the Vercel project.
 - **"API unreachable" dot**: confirm `apps/api/.env` has a valid `ANTHROPIC_API_KEY` (it's the only required value in bypass mode) and that the API printed its listening line.
 - **CORS errors**: confirm `WEB_ORIGIN` exactly matches the browser's origin, no trailing slash.
 - **`auth.users` not found in SQL editor**: wait for Supabase provisioning to finish, then re-run.

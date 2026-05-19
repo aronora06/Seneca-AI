@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
 import type { SessionRecord } from "@seneca/shared";
+import { DEFAULT_DIAGRAMS_STATE } from "@seneca/shared";
 import {
   DEFAULT_DOCUMENTS_STATE,
   DEFAULT_MAP_STATE,
@@ -84,18 +85,27 @@ describe("sessionStore (memory)", () => {
     await expect(sessionStore.delete(aSessionId, userA)).resolves.not.toThrow();
   });
 
+  it("updateDiagrams persists draw.io xml", async () => {
+    const xml =
+      '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="Hi" vertex="1" parent="1"/></root></mxGraphModel>';
+    await sessionStore.updateDiagrams(aSessionId, userA, { xml });
+    const row = await sessionStore.getFullById(aSessionId, userA);
+    expect(row!.diagrams.xml).toBe(xml);
+  });
+
   it("delete by non-owner silently no-ops", async () => {
     await sessionStore.delete(aSessionId, userB);
     const stillThere = await sessionStore.getFullById(aSessionId, userA);
     expect(stillThere).not.toBeNull();
   });
 
-  it("getById returns id/web/documents only", async () => {
+  it("getById returns id/web/documents/diagrams only", async () => {
     const slim = await sessionStore.getById(aSessionId, userA);
     expect(slim).not.toBeNull();
     expect(slim!.id).toBe(aSessionId);
     expect(slim!.web).toBeDefined();
     expect(slim!.documents).toBeDefined();
+    expect(slim!.diagrams).toBeDefined();
     expect(slim).not.toHaveProperty("transcript");
     expect(slim).not.toHaveProperty("whiteboard");
   });
@@ -259,6 +269,7 @@ describe("summarizeSession", () => {
     name: "Test",
     transcript: [],
     whiteboard: { elements: [] },
+    diagrams: { ...DEFAULT_DIAGRAMS_STATE },
     map: { ...DEFAULT_MAP_STATE },
     web: { ...DEFAULT_WEB_STATE },
     documents: { ...DEFAULT_DOCUMENTS_STATE },
@@ -346,6 +357,18 @@ describe("summarizeSession", () => {
       "map",
       "whiteboard",
     ]);
+  });
+
+  it("flags diagrams tab when diagram xml has content", () => {
+    const xml = `${DEFAULT_DIAGRAMS_STATE.xml.replace(
+      "</root>",
+      '<mxCell id="2" value="Node" vertex="1" parent="1"><mxGeometry as="geometry"/></mxCell></root>',
+    )}`;
+    const out = summarizeSession({
+      ...base,
+      diagrams: { xml },
+    });
+    expect(out.tabs).toContain("diagrams");
   });
 
   it("skips empty-text user messages when picking the snippet", () => {

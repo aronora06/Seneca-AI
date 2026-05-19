@@ -341,10 +341,51 @@ export function VoicePanel() {
         </label>
       </Section>
 
-      <Section label="Default input mode">
+      <Section
+        label="Conversation mode"
+        hint="Hands-free, full-duplex talking with Seneca. Speak whenever you want; he stops the moment you do."
+      >
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-surface-sunk/40 p-3">
+          <input
+            type="checkbox"
+            checked={prefs.conversationMode}
+            onChange={(e) =>
+              update({
+                conversationMode: e.target.checked,
+                conversationModeHintDismissed: true,
+              })
+            }
+            className="mt-0.5 h-4 w-4 rounded border-border text-accent focus:ring-accent"
+          />
+          <span className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-fg">
+              Use Conversation Mode
+            </span>
+            <span className="text-xs text-fg-muted">
+              Uses a Silero voice-activity detector to know when you're
+              actually talking. Replaces the push-to-talk and continuous
+              toggles below — they're disabled while Conversation Mode is
+              on. About 5&nbsp;MB of model files load on first use from
+              the jsDelivr CDN; cached after that.
+            </span>
+          </span>
+        </label>
+      </Section>
+
+      <Section
+        label="Default input mode"
+        hint={
+          prefs.conversationMode
+            ? "Ignored while Conversation Mode is on."
+            : undefined
+        }
+      >
         <div
           role="radiogroup"
-          className="flex gap-1 rounded-lg border border-border bg-surface-sunk/50 p-1"
+          className={clsx(
+            "flex gap-1 rounded-lg border border-border bg-surface-sunk/50 p-1",
+            prefs.conversationMode && "opacity-60",
+          )}
         >
           {INPUT_MODE_OPTIONS.map((opt) => {
             const active = prefs.inputModeDefault === opt.value;
@@ -354,9 +395,10 @@ export function VoicePanel() {
                 type="button"
                 role="radio"
                 aria-checked={active}
+                disabled={prefs.conversationMode}
                 onClick={() => update({ inputModeDefault: opt.value })}
                 className={clsx(
-                  "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed",
                   active ? "bg-card text-fg shadow-sm" : "text-fg-muted hover:text-fg",
                 )}
               >
@@ -420,6 +462,25 @@ export function VoicePanel() {
           />
           <span className="text-sm text-fg-muted">
             Auto-submit ~1.5s after I stop talking
+          </span>
+        </label>
+      </Section>
+
+      <Section
+        label="Activity visuals"
+        hint="Directional waveforms and motion for voice activity. When off, simple status dots are used instead. If your system prefers reduced motion, animations stay static even when this is on."
+      >
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            checked={prefs.voiceVisualEffects}
+            onChange={(e) =>
+              update({ voiceVisualEffects: e.target.checked })
+            }
+            className="h-4 w-4 rounded border-border text-accent focus:ring-accent"
+          />
+          <span className="text-sm text-fg-muted">
+            Animated voice activity indicators
           </span>
         </label>
       </Section>

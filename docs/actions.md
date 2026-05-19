@@ -41,9 +41,10 @@ A single `/api/chat` or `/api/vision` request runs a **server-side agent loop**.
 
    Next user turn
        client → ChatRequest.toolResults = drainToolResults()
+                (each entry: toolUseId, ok, error?, output?)
        server → buildAnthropicMessages re-emits prior tool_use blocks +
                 synthesises matching tool_result blocks from toolResults
-                so Seneca sees the real outcomes from the previous turn.
+                so Seneca sees errors and structured output from the previous turn.
 ```
 
 ### Cross-turn `tool_result` round-trip (Phase 3)
@@ -56,9 +57,39 @@ Phase 3 closed the long-standing "tool failures vanish across turns" gap.
 
 Net effect: a real failure string (`"document_go_to_page: no documents loaded"`) reaches Seneca on the next turn, exactly the round-trip vision §8.8 called for.
 
+When a client tool succeeds, the dispatcher may also attach **`output`** — structured JSON that `buildAnthropicMessages` serialises into the matching `tool_result` on the next turn (same path as errors). Examples: measured whiteboard bounds after `whiteboard_add_element`, Tavily hits after `web_search`, map pin list after `map_drop_pin`. Within the *same* turn the server still emits synthetic `"ok"` for client tools so Claude can chain; the rich `output` is for the *following* user message.
+
+## Workspace context (`<workspace_context>`)
+
+Every `/api/chat` and `/api/vision` request may include a `workspaceContext` object on the wire ([`ChatRequest`](../packages/shared/src/types.ts)). The API merges it into the system prompt via [`formatWorkspaceContextForPrompt`](../packages/shared/src/workspaceContext.ts) inside `buildSystemPrompt` ([`apps/api/src/routes/chat.ts`](../apps/api/src/routes/chat.ts)).
+
+**Purpose:** give Seneca grounded facts about the shared canvas when the eye is **off** (or as a supplement when vision is on). Vision sends pixels for the *active tab only*; workspace context sends cheap structured state for *all* persisted slices the client knows about.
+
+**Built on the client** in [`apps/web/src/lib/workspaceContext.ts`](../apps/web/src/lib/workspaceContext.ts) from `useSenecaStore` + [`readResolvedTheme`](../apps/web/src/lib/whiteboardTheme.ts). Attached in [`apps/web/src/lib/runTurn.ts`](../apps/web/src/lib/runTurn.ts) on every turn.
+
+### What is included
+
+| Area | Fields (summary) |
+|---|---|
+| **Global** | `activeTab`, `vision` (off / once / locked), `uiTheme` (light / dark), optional `visionCaptureFailed` |
+| **Voice** | `voice.mode`, `voice.muted` |
+| **Whiteboard** | background hex, recommended stroke, element count, **viewport bounds** (scene units from scroll/zoom), **element digest** (≤20: type, x/y/w/h, truncated text) |
+| **Map** | centre, zoom, layer, pin/shape counts, up to 12 pin labels + coordinates |
+| **Documents** | active doc id/name/page, per-doc `textStatus` / `indexStatus` / `origin` |
+| **Web** | `url`, `searchOverlayOpen` when the Tavily card list is showing |
+| **Diagrams** | `cellCount`, `labelDigest` (≤20 labels), `hasContent` |
+
+### Persistence note
+
+`activeTab` is debounced to `PUT /api/sessions/:id/active-tab` ([`apps/web/src/lib/persistActiveTab.ts`](../apps/web/src/lib/persistActiveTab.ts)) and restored on session switch. Real-auth Postgres needs the `active_tab` column — see [`docs/setup.md`](setup.md) §3.1.
+
+### Prompt discipline
+
+[`packages/shared/src/prompt.ts`](../packages/shared/src/prompt.ts) tells Seneca to treat `<workspace_context>` as ground truth when vision is off, to use recommended stroke colours, and to omit `strokeColor` on whiteboard tools when the default is fine.
+
 ## Tools available in this slice
 
-All tools live in [`packages/shared/src/tools.ts`](../packages/shared/src/tools.ts). The MVP set is complete: whiteboard, map, web, documents (read / list / search / go-to-page / create), and the cross-cutting server-fulfilled helpers.
+All tools live in [`packages/shared/src/tools.ts`](../packages/shared/src/tools.ts). The set includes whiteboard, diagrams (draw.io), map, web, documents (read / list / search / go-to-page / create), and the cross-cutting server-fulfilled helpers.
 
 > **Naming note:** Anthropic's tool names must match `^[a-zA-Z0-9_-]{1,128}$`, so dots aren't allowed. The vision doc's namespaced form (`whiteboard.add_element`) is rendered as `whiteboard_add_element` on the wire. The split is purely cosmetic.
 
@@ -74,16 +105,38 @@ Add one element to the shared Excalidraw scene. Coordinates are in scene units (
     "x": number,
     "y": number,
     "text": string,                    // required when type === "text"
-    "width": number,                   // for rectangle / ellipse (default 120)
+    "width": number,                   // text: box width for wrapping (auto-estimated when omitted); shapes: default 120
     "height": number,                  // for rectangle / ellipse (default 80)
     "points": [[number, number], ...], // for line / arrow / freedraw, relative to (x, y); first point should be [0, 0]
-    "strokeColor": "#1e1e1e",          // optional, default Excalidraw black
+    "strokeColor": "#1e1e1e",          // optional; client enforces contrast + may override
     "fontSize": 20                     // optional, default for text
   }
 }
 ```
 
-**Implementation note:** Excalidraw's `freedraw` element requires pressure data and other internal fields we can't synthesise. When Seneca emits `freedraw`, we render it as a multi-point `line` — visually identical for sketchy diagrams. See [`apps/web/src/lib/whiteboardActions.ts`](../apps/web/src/lib/whiteboardActions.ts).
+**Client `tool_result.output` (next turn)** after a successful add:
+
+```json
+{
+  "elementId": "abc",
+  "type": "text",
+  "x": 100,
+  "y": 100,
+  "width": 312,
+  "height": 28,
+  "text": "CLASSIC MEATLOAF",
+  "appliedStrokeColor": "#1e1e1e",
+  "warnings": ["Text may be clipped: box width 80px but content likely needs ~220px."]
+}
+```
+
+**Implementation notes** ([`apps/web/src/lib/whiteboardActions.ts`](../apps/web/src/lib/whiteboardActions.ts), [`apps/web/src/lib/whiteboardScene.ts`](../apps/web/src/lib/whiteboardScene.ts)):
+
+- Awaits `document.fonts.ready` before `convertToExcalidrawElements` (mitigates Excalidraw font-metric races).
+- Text width is measured with canvas `measureText` (Virgil + emoji fonts) plus a safety margin; emoji get extra width in the SSR fallback.
+- After placement, the element is **auto-widened** if Excalidraw finalised a box narrower than the content needs.
+- Post-placement **lint** adds `warnings` for off-viewport placement or likely clipping (tldraw-style "lints" without an extra model call).
+- Excalidraw's `freedraw` element requires pressure data and other internal fields we can't synthesise. When Seneca emits `freedraw`, we render it as a multi-point `line` — visually identical for sketchy diagrams.
 
 ### `whiteboard_clear`
 
@@ -95,6 +148,28 @@ Clear every element from the whiteboard.
   "input": {}
 }
 ```
+
+### Diagram tools
+
+The diagrams tab uses a draw.io embed ([`DiagramsTab.tsx`](../apps/web/src/components/Canvas/DiagramsTab.tsx), [`diagramBridge.ts`](../apps/web/src/lib/diagramBridge.ts)). Parsing and mutation helpers live in [`packages/shared/src/diagramGraph.ts`](../packages/shared/src/diagramGraph.ts) and [`diagramXmlMutate.ts`](../packages/shared/src/diagramXmlMutate.ts).
+
+#### Client-fulfilled
+
+- **`diagram_load`** — `{ format: "mermaid" | "xml", data: string }` replaces the diagram.
+- **`diagram_merge`** — `{ xml: string }` merges into the live diagram.
+- **`diagram_clear`** — `{}` resets to the empty template.
+- **`diagram_set_label`** — `{ cellId, text }` updates one cell label (XML mutation + reload).
+- **`diagram_remove_cells`** — `{ cellIds: string[] }` removes cells (never `0` or `1`).
+- **`diagram_add_nodes`** — `{ xml }` validated merge for incremental shapes.
+- **`diagram_layout`** — `{ algorithm?: "horizontalFlow" | "verticalFlow" | "organic" }` runs draw.io auto-layout.
+
+**Client `tool_result.output` (next turn):** `DiagramToolResult` — `{ cellCount, labels[], hasContent, merged?, cleared?, diff?, warnings?, bounds? }`. `diff` lists added/removed vertex and edge ids plus label changes. Results are built from **live embed XML** (`getLiveXml()`), not debounced Zustand alone.
+
+#### Server-fulfilled
+
+- **`diagram_read`** — `{ includeMermaid?: boolean }` (default true when the graph is small). Returns `DiagramReadResult` JSON: vertices, edges, bounds, warnings, optional Mermaid. Uses **last persisted** `session.diagrams.xml` from Postgres. Live unsaved edits appear in `workspace_context` on the user's next message (client sends live XML when the diagrams tab is active).
+
+XML generation rules: [draw.io AI generation FAQ](https://www.drawio.com/doc/faq/ai-drawio-generation).
 
 ### `map_fly_to`
 
@@ -158,6 +233,8 @@ Switch the base tile layer. `standard` is OpenStreetMap; `satellite` is Esri Wor
 
 **Implementation note:** the dispatcher pulses the map tab before each `map_*` call (`setActiveTab("map", { pulse: true })`) so the user sees the switch happen even if they were on a different tab. See [`apps/web/src/lib/actionDispatcher.ts`](../apps/web/src/lib/actionDispatcher.ts).
 
+**Client `tool_result.output` (next turn)** after map mutations: `{ center, zoom, layer, pins: [{ lat, lng, label? }], shapes }` from [`apps/web/src/lib/toolResultOutputs.ts`](../apps/web/src/lib/toolResultOutputs.ts).
+
 ### `web_navigate`
 
 Load a URL through the sanitised proxy. The proxy refuses anything that isn't `http(s)` and any host that resolves to a private / loopback / link-local IP.
@@ -172,6 +249,8 @@ Load a URL through the sanitised proxy. The proxy refuses anything that isn't `h
 ```
 
 The dispatcher `await`s the proxy fetch, so the chip turns green only once the iframe has the new HTML. Failures (bad scheme, SSRF block, timeout, non-HTML, oversize) bubble back as a red chip with the proxy's friendly message.
+
+**Client `tool_result.output` (next turn):** `{ "url": "https://…" }`.
 
 ### `web_search`
 
@@ -188,6 +267,8 @@ Search the web via Tavily. Returns a clickable card list overlaid on the page ar
 ```
 
 `max_results` defaults to 5, capped at 10. If `TAVILY_API_KEY` is unset on the server the route returns 503 and the chip explains how to fix it (see [`docs/setup.md`](setup.md) §2.5).
+
+**Client `tool_result.output` (next turn):** `{ "query": "…", "results": [{ "title", "url", "snippet" }, …] }` so Seneca can cite results without vision. The overlay also sets `webSearchOverlayOpen` in workspace context on subsequent turns.
 
 ### `web_read_page`
 
@@ -243,6 +324,8 @@ Navigate the documents tab to a specific page. Pages are 1-indexed; values past 
 - When `document_id` refers to a document that's still loading, the page change is queued in `pendingPageRef` and applied once `<Document>`'s `onLoadSuccess` fires with the real page count.
 - Throws when no documents are loaded — the chip turns red with a message Seneca can address on the next turn ("the user needs to upload a PDF first").
 - See [`apps/web/src/lib/documentActions.ts`](../apps/web/src/lib/documentActions.ts) and [`apps/web/src/components/Canvas/DocumentTab.tsx`](../apps/web/src/components/Canvas/DocumentTab.tsx).
+
+**Client `tool_result.output` (next turn):** `{ documentId, page, pageCount, name }`.
 
 ### `document_read_page`
 
@@ -399,7 +482,7 @@ The `tool_result` envelope is:
 - The resolver mutates the in-loop `sessionRow.documents` and `activeDocumentId`, so a chained `document_go_to_page` later in the same turn lands the user on the freshly-authored doc.
 - `DocumentRecord.origin` is set to `"ai-created"` so the sidebar can badge it.
 
-`web_read_page`, `document_read_page`, `document_list`, `document_search`, and `document_create` are *server-fulfilled* — the agent loop in [`apps/api/src/routes/chat.ts`](../apps/api/src/routes/chat.ts) detects the tool name, runs the resolver inline (`fetchAndSanitise` + `extractTextFromHtml` for the web tool; `documentTextStore.getPage` plus optional `renderPdfPageToPng` for the document read; a pure projection of `sessionRow.documents` for `document_list`; cosine top-k via Voyage + pgvector for `document_search`, with substring fallback; pageify + persist + index + emit-SSE for `document_create`), and feeds the real content back as the `tool_result` content. The client still receives the action SSE event so the chip appears, but the dispatcher is a no-op for these tools (see [`apps/web/src/lib/actionDispatcher.ts`](../apps/web/src/lib/actionDispatcher.ts)).
+`web_read_page`, `diagram_read`, `document_read_page`, `document_list`, `document_search`, and `document_create` are *server-fulfilled* — the agent loop in [`apps/api/src/routes/chat.ts`](../apps/api/src/routes/chat.ts) detects the tool name, runs the resolver inline (`fetchAndSanitise` + `extractTextFromHtml` for the web tool; `documentTextStore.getPage` plus optional `renderPdfPageToPng` for the document read; a pure projection of `sessionRow.documents` for `document_list`; cosine top-k via Voyage + pgvector for `document_search`, with substring fallback; pageify + persist + index + emit-SSE for `document_create`), and feeds the real content back as the `tool_result` content. The client still receives the action SSE event so the chip appears, but the dispatcher is a no-op for these tools (see [`apps/web/src/lib/actionDispatcher.ts`](../apps/web/src/lib/actionDispatcher.ts)).
 
 Notably, `document_read_page` is the first tool whose `tool_result` content is *multimodal* — when text extraction fails it returns an array of `[text, image]` blocks instead of a string. The agent-loop types in `chat.ts` (`AnthropicToolResultContent`) accept either shape.
 

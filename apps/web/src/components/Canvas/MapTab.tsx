@@ -442,7 +442,7 @@ export function MapTab() {
     <div className="relative h-full w-full">
       <div
         ref={containerRef}
-        className="absolute inset-0 bg-surface"
+        className="absolute inset-0 bg-transparent"
         aria-label="World map"
       />
       <MapLayerSwitcher

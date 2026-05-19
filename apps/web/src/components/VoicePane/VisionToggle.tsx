@@ -36,13 +36,13 @@ const SEGMENTS: SegmentDef[] = [
   },
   {
     mode: "once",
-    label: "Once",
+    label: "",
     helperText:
       "Seneca sees the canvas on your next message only, then turns vision off.",
   },
   {
     mode: "locked",
-    label: "Locked",
+    label: "",
     helperText:
       "Seneca sees the canvas on every message until you switch vision off.",
   },

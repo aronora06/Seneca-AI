@@ -1,33 +1,18 @@
 /**
  * Phase C — premium TTS via the `/api/tts` ElevenLabs proxy.
  *
- * Mirrors the `SpeechSynthesisHook` interface from
- * `useSpeechSynthesis.ts` so callers can swap implementations behind a
- * facade without touching their UI. Streaming and queueing strategy:
- *
- *   - `speak(text)` opens a streaming POST to `/api/tts`, reads the
- *     response into a single Blob, wraps it in an object URL, and
- *     appends to a per-hook utterance queue.
- *   - A hidden `<audio>` element plays the queue head; when it ends
- *     (`onended`), the URL is revoked and the next utterance plays.
- *   - `pause` / `resume` defer to the underlying audio element.
- *   - `skip` advances the queue, revokes the current URL, and starts
- *     the next utterance immediately.
- *   - `clear` empties the queue and stops the player.
- *   - `setMuted` cancels in-flight playback and prevents future
- *     `speak` calls from producing audio until muted is set back to
- *     false (matching the browser-TTS hook's contract).
- *
- * The hook also exposes a `latestUsage` callback so `runTurn` can debit
- * cost telemetry with the character count returned by the proxy.
- *
- * Graceful fallback: when `available` is false (ElevenLabs key unset,
- * server unreachable, etc.) every action is a no-op so the caller can
- * unconditionally invoke the hook and rely on the parent facade to
- * pick browser TTS instead.
+ * Queue model:
+ *   - Each `speak()` enqueues a sentence and **starts fetching immediately**
+ *     (prefetch) so playback does not wait on network after the prior sentence.
+ *   - A single pump loop plays items in order (no recursive playNext races).
+ *   - `clear()` aborts in-flight work — call before each new user turn so stale
+ *     sentences from a prior response cannot play a minute later.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { registerPlaybackAudio } from "../lib/playbackAudioRegistry";
+import { playTtsResponse } from "../lib/streamTtsPlayback";
+import { ttsLog } from "../lib/ttsTimeline";
 import { readPrefs } from "../lib/userPreferences";
 import { devBearer, devBypassAuth } from "../lib/devBypass";
 import { supabase } from "../lib/supabase";
@@ -40,6 +25,7 @@ const API_BASE =
 export interface ElevenLabsSpeechHook {
   supported: boolean;
   speaking: boolean;
+  audioActive: boolean;
   paused: boolean;
   muted: boolean;
   setMuted: (m: boolean) => void;
@@ -51,122 +37,260 @@ export interface ElevenLabsSpeechHook {
 }
 
 interface QueueItem {
+  id: number;
   text: string;
   voiceId: string;
   sessionId: string | null;
-  /** Resolved when this item is fetched + played + ended (or errored). */
-  done: Promise<void>;
   abort: AbortController;
+  /** Begins when the item is enqueued — not when playback starts. */
+  fetchPromise: Promise<Response>;
 }
 
 interface Options {
-  /** Whether the ElevenLabs path is available (config flag). */
   available: boolean;
-  /** Called with character count after each successful synth. */
   onUsage?: (chars: number, voiceId: string) => void;
-  /** Called with a human message when synthesis fails. */
   onError?: (message: string) => void;
+}
+
+let nextItemId = 0;
+
+/** Avoid hammering /api/tts when many sentences enqueue during one turn. */
+const MAX_CONCURRENT_TTS_FETCHES = 3;
+
+/**
+ * Cap pending sentences waiting to play. Beyond this we merge older
+ * queued lines into one fetch so a long reply cannot trail by minutes.
+ */
+const MAX_QUEUED_ITEMS = 4;
+let activeTtsFetches = 0;
+const fetchWaiters: Array<() => void> = [];
+
+async function acquireTtsFetchSlot(): Promise<void> {
+  if (activeTtsFetches < MAX_CONCURRENT_TTS_FETCHES) {
+    activeTtsFetches++;
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    fetchWaiters.push(() => {
+      activeTtsFetches++;
+      resolve();
+    });
+  });
+}
+
+function releaseTtsFetchSlot(): void {
+  activeTtsFetches = Math.max(0, activeTtsFetches - 1);
+  const next = fetchWaiters.shift();
+  if (next) next();
+}
+
+async function fetchTtsGated(
+  text: string,
+  voiceId: string,
+  sessionId: string | null,
+  signal: AbortSignal,
+): Promise<Response> {
+  await acquireTtsFetchSlot();
+  try {
+    return await fetchTtsResponse(text, voiceId, sessionId, signal);
+  } finally {
+    releaseTtsFetchSlot();
+  }
 }
 
 export function useElevenLabsSpeech(opts: Options): ElevenLabsSpeechHook {
   const { available, onUsage, onError } = opts;
   const [speaking, setSpeaking] = useState(false);
+  const [audioActive, setAudioActive] = useState(false);
   const [paused, setPaused] = useState(false);
   const [muted, setMutedState] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const queueRef = useRef<QueueItem[]>([]);
   const playingRef = useRef<QueueItem | null>(null);
+  const pumpingRef = useRef(false);
+  /** Bumped on clear/skip so an in-flight pump exits without touching state. */
+  const pumpGenRef = useRef(0);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
 
-  // The latest callbacks live on a ref so the audio-element handlers
-  // see fresh closures without re-binding.
   const onUsageRef = useRef(onUsage);
   onUsageRef.current = onUsage;
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
   useEffect(() => {
-    // Lazily allocate a hidden audio element the first time the hook
-    // mounts in an available state. Stays alive for the page lifetime
-    // so we don't leak listeners on every `speak`.
     if (!available) return;
     if (audioRef.current) return;
     const el = new Audio();
     el.preload = "auto";
     el.crossOrigin = "anonymous";
     audioRef.current = el;
+    registerPlaybackAudio(el);
+    return () => {
+      registerPlaybackAudio(null);
+    };
   }, [available]);
 
-  const playNext = useCallback(async () => {
-    const next = queueRef.current.shift();
-    if (!next) {
-      playingRef.current = null;
-      setSpeaking(false);
-      setPaused(false);
-      return;
-    }
-    const audio = audioRef.current;
-    if (!audio) {
-      playingRef.current = null;
-      return;
-    }
-    playingRef.current = next;
-    try {
-      const blob = await fetchTts(
-        next.text,
-        next.voiceId,
-        next.sessionId,
-        next.abort.signal,
-      );
-      if (mutedRef.current) {
-        // Muted between request and playback — drop silently.
-        URL.revokeObjectURL(blob.url);
-        void playNext();
-        return;
-      }
-      audio.src = blob.url;
-      setSpeaking(true);
-      setPaused(false);
-      try {
-        await audio.play();
-      } catch {
-        // Autoplay denied? Treat as error and move on.
-      }
-      onUsageRef.current?.(blob.characters, next.voiceId);
+  const syncAudioActive = useCallback(() => {
+    const audible =
+      !!audioRef.current &&
+      !audioRef.current.paused &&
+      !audioRef.current.ended &&
+      audioRef.current.currentTime > 0;
+    setAudioActive(
+      queueRef.current.length > 0 || playingRef.current !== null || audible,
+    );
+    setSpeaking(audible);
+  }, []);
 
-      const cleanup = () => {
-        URL.revokeObjectURL(blob.url);
-        audio.removeEventListener("ended", onEnded);
-        audio.removeEventListener("error", onErrored);
-      };
-      const onEnded = () => {
-        cleanup();
-        void playNext();
-      };
-      const onErrored = () => {
-        cleanup();
-        onErrorRef.current?.("Audio playback failed.");
-        void playNext();
-      };
-      audio.addEventListener("ended", onEnded, { once: true });
-      audio.addEventListener("error", onErrored, { once: true });
-    } catch (err) {
-      if (
-        err instanceof DOMException &&
-        (err.name === "AbortError" || err.code === DOMException.ABORT_ERR)
-      ) {
-        // Skipped or cleared — just advance.
-        void playNext();
-        return;
-      }
-      const msg =
-        err instanceof Error ? err.message : "TTS request failed.";
-      onErrorRef.current?.(msg);
-      void playNext();
+  const resetAudioElement = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+    audio.removeAttribute("src");
+    try {
+      audio.load();
+    } catch {
+      // load() can throw if the element is in a bad state — safe to ignore.
     }
   }, []);
+
+  const ensurePump = useCallback(async () => {
+    if (pumpingRef.current) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const gen = pumpGenRef.current;
+    pumpingRef.current = true;
+    setAudioActive(true);
+
+    try {
+      while (queueRef.current.length > 0) {
+        if (pumpGenRef.current !== gen) {
+          ttsLog("pump.stale", { gen, currentGen: pumpGenRef.current });
+          break;
+        }
+        const next = queueRef.current.shift()!;
+        playingRef.current = next;
+
+        ttsLog("pump.play", {
+          id: next.id,
+          queueRemaining: queueRef.current.length,
+          chars: next.text.length,
+          preview: next.text.slice(0, 72),
+        });
+
+        try {
+          const tFetch = performance.now();
+          const res = await next.fetchPromise;
+          if (pumpGenRef.current !== gen) {
+            ttsLog("pump.stale", { id: next.id, phase: "after_fetch" });
+            break;
+          }
+          ttsLog("pump.fetched", {
+            id: next.id,
+            ms: Math.round(performance.now() - tFetch),
+            status: res.status,
+          });
+
+          if (mutedRef.current) continue;
+
+          const tPlay = performance.now();
+          const meta = await playTtsResponse({
+            res,
+            audio,
+            signal: next.abort.signal,
+            fallbackTextLength: next.text.length,
+            fallbackVoiceId: next.voiceId,
+            onPlaybackStart: () => {
+              setSpeaking(true);
+              setPaused(false);
+            },
+          });
+
+          ttsLog("pump.played", {
+            id: next.id,
+            ms: Math.round(performance.now() - tPlay),
+          });
+
+          onUsageRef.current?.(meta.characters, meta.voiceId);
+        } catch (err) {
+          if (
+            err instanceof DOMException &&
+            (err.name === "AbortError" ||
+              err.code === DOMException.ABORT_ERR)
+          ) {
+            ttsLog("pump.aborted", { id: next.id });
+            continue;
+          }
+          const msg =
+            err instanceof Error ? err.message : "TTS request failed.";
+          ttsLog("pump.error", { id: next.id, message: msg });
+          onErrorRef.current?.(msg);
+        }
+      }
+    } finally {
+      playingRef.current = null;
+      if (pumpGenRef.current === gen) {
+        pumpingRef.current = false;
+        syncAudioActive();
+        if (queueRef.current.length > 0) {
+          void ensurePump();
+        }
+      } else {
+        pumpingRef.current = false;
+        ttsLog("pump.superseded", { gen });
+      }
+    }
+  }, [syncAudioActive]);
+
+  const makeQueueItem = useCallback(
+    (
+      trimmed: string,
+      voiceId: string,
+      sessionId: string | null,
+    ): QueueItem => {
+      const abort = new AbortController();
+      const id = ++nextItemId;
+      return {
+        id,
+        text: trimmed,
+        voiceId,
+        sessionId,
+        abort,
+        fetchPromise: fetchTtsGated(
+          trimmed,
+          voiceId,
+          sessionId,
+          abort.signal,
+        ),
+      };
+    },
+    [],
+  );
+
+  const coalesceOverflowQueue = useCallback(
+    (voiceId: string, sessionId: string | null) => {
+      const queue = queueRef.current;
+      while (queue.length > MAX_QUEUED_ITEMS) {
+        const excessCount = queue.length - MAX_QUEUED_ITEMS;
+        const excess = queue.splice(0, excessCount);
+        const mergedText = excess.map((i) => i.text).join(" ");
+        for (const item of excess) item.abort.abort();
+        const merged = makeQueueItem(mergedText, voiceId, sessionId);
+        queue.unshift(merged);
+        ttsLog("speak.coalesce", {
+          id: merged.id,
+          mergedCount: excessCount,
+          chars: mergedText.length,
+          queueLen: queue.length,
+        });
+      }
+    },
+    [makeQueueItem],
+  );
 
   const speak = useCallback(
     (text: string) => {
@@ -178,18 +302,22 @@ export function useElevenLabsSpeech(opts: Options): ElevenLabsSpeechHook {
       if (!prefs.ttsAutoPlay) return;
       const voiceId = prefs.ttsVoiceId ?? "";
       const sessionId = useSenecaStore.getState().session.id;
-      const item: QueueItem = {
-        text: trimmed,
-        voiceId,
-        sessionId,
-        abort: new AbortController(),
-        done: Promise.resolve(),
-      };
+
+      const item = makeQueueItem(trimmed, voiceId, sessionId);
       queueRef.current.push(item);
-      // If nothing is playing, kick the pump.
-      if (!playingRef.current) void playNext();
+      coalesceOverflowQueue(voiceId, sessionId);
+      setAudioActive(true);
+
+      ttsLog("speak.enqueue", {
+        id: item.id,
+        queueLen: queueRef.current.length,
+        chars: trimmed.length,
+        preview: trimmed.slice(0, 72),
+      });
+
+      void ensurePump();
     },
-    [available, playNext],
+    [available, coalesceOverflowQueue, ensurePump, makeQueueItem],
   );
 
   const pause = useCallback(() => {
@@ -206,36 +334,30 @@ export function useElevenLabsSpeech(opts: Options): ElevenLabsSpeechHook {
     setPaused(false);
   }, []);
 
-  const skip = useCallback(() => {
-    const current = playingRef.current;
-    if (current) {
-      current.abort.abort();
-      playingRef.current = null;
-    }
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.currentTime = 0;
-      audio.removeAttribute("src");
-    }
-    void playNext();
-  }, [playNext]);
-
-  const clear = useCallback(() => {
+  const stopPlayback = useCallback(() => {
+    pumpGenRef.current += 1;
     const current = playingRef.current;
     if (current) current.abort.abort();
     for (const item of queueRef.current) item.abort.abort();
     queueRef.current = [];
     playingRef.current = null;
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.currentTime = 0;
-      audio.removeAttribute("src");
-    }
+    resetAudioElement();
     setSpeaking(false);
+    setAudioActive(false);
     setPaused(false);
-  }, []);
+  }, [resetAudioElement]);
+
+  const skip = useCallback(() => {
+    ttsLog("skip");
+    stopPlayback();
+    void ensurePump();
+  }, [stopPlayback, ensurePump]);
+
+  const clear = useCallback(() => {
+    ttsLog("clear", { hadQueue: queueRef.current.length });
+    stopPlayback();
+    // Aborted fetches still release slots in finally; no drain needed.
+  }, [stopPlayback]);
 
   const setMuted = useCallback(
     (m: boolean) => {
@@ -245,22 +367,18 @@ export function useElevenLabsSpeech(opts: Options): ElevenLabsSpeechHook {
     [clear],
   );
 
-  // Belt-and-braces sync: if the audio element ever transitions to
-  // ended without firing our `ended` listener (rare), keep `speaking`
-  // honest.
   useEffect(() => {
     if (!available) return;
     const audio = audioRef.current;
     if (!audio) return;
-    const i = window.setInterval(() => {
-      setSpeaking(!audio.paused && !audio.ended && audio.currentTime > 0);
-    }, 750);
+    const i = window.setInterval(() => syncAudioActive(), 200);
     return () => window.clearInterval(i);
-  }, [available]);
+  }, [available, syncAudioActive]);
 
   return {
     supported: available,
     speaking,
+    audioActive,
     paused,
     muted,
     setMuted,
@@ -272,22 +390,23 @@ export function useElevenLabsSpeech(opts: Options): ElevenLabsSpeechHook {
   };
 }
 
-interface TtsBlob {
-  url: string;
-  characters: number;
-  voiceId: string;
-}
+const TTS_FETCH_TIMEOUT_MS = 45_000;
 
-async function fetchTts(
+async function fetchTtsResponse(
   text: string,
   voiceId: string,
   sessionId: string | null,
   signal: AbortSignal,
-): Promise<TtsBlob> {
+): Promise<Response> {
   const token = await getToken();
-  const res = await fetch(`${API_BASE}/api/tts`, {
+  const timeout = AbortSignal.timeout(TTS_FETCH_TIMEOUT_MS);
+  const combined =
+    typeof AbortSignal.any === "function"
+      ? AbortSignal.any([signal, timeout])
+      : signal;
+  return fetch(`${API_BASE}/api/tts`, {
     method: "POST",
-    signal,
+    signal: combined,
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
@@ -299,22 +418,6 @@ async function fetchTts(
       sessionId: sessionId ?? undefined,
     }),
   });
-  if (!res.ok) {
-    const json = (await res.json().catch(() => null)) as
-      | { error?: string; kind?: string }
-      | null;
-    throw new Error(
-      json?.error ?? `Premium TTS failed with ${res.status}`,
-    );
-  }
-  const blob = await res.blob();
-  const characters = Number(res.headers.get("X-Characters") ?? "0") || text.length;
-  const resolvedVoiceId = res.headers.get("X-Voice-Id") ?? voiceId;
-  return {
-    url: URL.createObjectURL(blob),
-    characters,
-    voiceId: resolvedVoiceId,
-  };
 }
 
 async function getToken(): Promise<string> {

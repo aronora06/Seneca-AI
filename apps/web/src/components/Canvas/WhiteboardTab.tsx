@@ -13,6 +13,10 @@ import { setWhiteboardApi } from "../../lib/whiteboardBridge";
 import { registerCapturer } from "../../lib/captureCanvas";
 import { apiJson } from "../../lib/api";
 import { useTheme } from "../../theme/ThemeProvider";
+import {
+  getWhiteboardBackgroundColor,
+  invalidateWhiteboardBgCache,
+} from "../../lib/whiteboardTheme";
 import type { WhiteboardState } from "@seneca/shared";
 
 const DEBOUNCE_MS = 600;
@@ -49,7 +53,7 @@ export function WhiteboardTab() {
   // Read once. Excalidraw owns the live state from here on.
   const [initialData] = useState(() => {
     const initial = useSenecaStore.getState().whiteboard;
-    const bg = whiteboardBgFor(resolved);
+    const bg = getWhiteboardBackgroundColor(resolved);
     if (!initial || !Array.isArray(initial.elements)) {
       return {
         elements: [],
@@ -79,7 +83,7 @@ export function WhiteboardTab() {
     api.updateScene({
       appState: {
         theme: resolved,
-        viewBackgroundColor: whiteboardBgFor(resolved),
+        viewBackgroundColor: getWhiteboardBackgroundColor(resolved),
       },
     } as Parameters<ExcalidrawImperativeAPI["updateScene"]>[0]);
   }, [resolved]);
@@ -97,7 +101,7 @@ export function WhiteboardTab() {
         appState: {
           ...appState,
           exportBackground: true,
-          viewBackgroundColor: whiteboardBgFor(resolved),
+          viewBackgroundColor: getWhiteboardBackgroundColor(resolved),
         },
         files,
         mimeType: "image/png",
@@ -186,67 +190,6 @@ export function WhiteboardTab() {
       />
     </div>
   );
-}
-
-// Theme-keyed cache of the resolved background colour. Reading
-// `getComputedStyle` is cheap but not free, and Excalidraw's onChange
-// fires per stroke — we'd rather look it up once per theme switch and
-// keep serving the cached value until the user flips themes. SSR /
-// jest contexts get a hardcoded fallback so the function stays safe to
-// call during initial render.
-const WHITEBOARD_BG_FALLBACK = { light: "#f8f6f1", dark: "#0e0a06" } as const;
-const whiteboardBgCache: Partial<Record<"light" | "dark", string>> = {};
-
-function whiteboardBgFor(theme: "light" | "dark"): string {
-  const cached = whiteboardBgCache[theme];
-  if (cached) return cached;
-  if (typeof window === "undefined" || typeof document === "undefined") {
-    return WHITEBOARD_BG_FALLBACK[theme];
-  }
-  // The semantic --c-surface token is the canvas surface in both
-  // themes. We read it from the root computed style so PNG exports
-  // automatically pick up palette tweaks without a code change here.
-  const raw = getComputedStyle(document.documentElement)
-    .getPropertyValue("--c-surface")
-    .trim();
-  const hex = rgbTripletToHex(raw) ?? WHITEBOARD_BG_FALLBACK[theme];
-  whiteboardBgCache[theme] = hex;
-  return hex;
-}
-
-/**
- * Convert a `--c-surface` token value (formatted as "R G B" because of
- * Tailwind's `<alpha-value>` plumbing) into a hex string Excalidraw can
- * use. Returns null when the value doesn't look like an RGB triplet so
- * the caller can fall back to the hardcoded constant.
- */
-function rgbTripletToHex(raw: string): string | null {
-  const match = raw.match(/^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/);
-  if (!match) return null;
-  const r = clampByte(Number(match[1]));
-  const g = clampByte(Number(match[2]));
-  const b = clampByte(Number(match[3]));
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-function clampByte(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(255, Math.round(n)));
-}
-
-function toHex(n: number): string {
-  return n.toString(16).padStart(2, "0");
-}
-
-/**
- * Force a fresh read of `--c-surface` next time `whiteboardBgFor` is
- * called. Invoked from the theme-change effect below so a runtime
- * palette swap (light ↔ dark, or a custom theme override) doesn't keep
- * returning the previously-cached colour.
- */
-function invalidateWhiteboardBgCache(): void {
-  whiteboardBgCache.light = undefined;
-  whiteboardBgCache.dark = undefined;
 }
 
 /**

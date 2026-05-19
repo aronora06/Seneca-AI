@@ -9,7 +9,12 @@ import type { SessionRecord } from "@seneca/shared";
 import { apiJson } from "./api";
 
 /** Canvas-tab markers shown as icons on a session card. */
-export type SessionTabFlag = "documents" | "web" | "map" | "whiteboard";
+export type SessionTabFlag =
+  | "documents"
+  | "web"
+  | "map"
+  | "whiteboard"
+  | "diagrams";
 
 /**
  * Summary returned by the list endpoint — full row is paged in on

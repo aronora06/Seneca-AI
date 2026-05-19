@@ -28,6 +28,27 @@ import {
   applyDocumentGoToPage,
   coerceGoToPageInput,
 } from "./documentActions";
+import {
+  applyDiagramAddNodes,
+  applyDiagramClear,
+  applyDiagramLayout,
+  applyDiagramLoad,
+  applyDiagramMerge,
+  applyDiagramRemoveCells,
+  applyDiagramSetLabel,
+  coerceDiagramAddNodesInput,
+  coerceDiagramLayoutInput,
+  coerceDiagramLoadInput,
+  coerceDiagramMergeInput,
+  coerceDiagramRemoveCellsInput,
+  coerceDiagramSetLabelInput,
+} from "./diagramActions";
+import {
+  documentGoToPageOutput,
+  mapStateOutput,
+  webNavigateOutput,
+  webSearchOutput,
+} from "./toolResultOutputs";
 
 export async function dispatchToolCall(call: ToolCall): Promise<ToolResult> {
   try {
@@ -36,91 +57,134 @@ export async function dispatchToolCall(call: ToolCall): Promise<ToolResult> {
         useSenecaStore.getState().setActiveTab("whiteboard", { pulse: true });
         const api = getWhiteboardApi();
         if (!api) throw new Error("Whiteboard is not mounted.");
-        applyWhiteboardAdd(api, call.input);
-        return { toolUseId: call.id, ok: true };
+        const placement = await applyWhiteboardAdd(api, call.input);
+        return { toolUseId: call.id, ok: true, output: placement };
       }
       case "whiteboard_clear": {
         useSenecaStore.getState().setActiveTab("whiteboard", { pulse: true });
         const api = getWhiteboardApi();
         if (!api) throw new Error("Whiteboard is not mounted.");
         applyWhiteboardClear(api);
+        return { toolUseId: call.id, ok: true, output: { cleared: true } };
+      }
+      case "diagram_load": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramLoad(coerceDiagramLoadInput(call.input));
+        return { toolUseId: call.id, ok: true, output };
+      }
+      case "diagram_merge": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramMerge(
+          coerceDiagramMergeInput(call.input),
+        );
+        return { toolUseId: call.id, ok: true, output };
+      }
+      case "diagram_clear": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramClear();
+        return { toolUseId: call.id, ok: true, output };
+      }
+      case "diagram_read": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
         return { toolUseId: call.id, ok: true };
+      }
+      case "diagram_set_label": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramSetLabel(
+          coerceDiagramSetLabelInput(call.input),
+        );
+        return { toolUseId: call.id, ok: true, output };
+      }
+      case "diagram_remove_cells": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramRemoveCells(
+          coerceDiagramRemoveCellsInput(call.input),
+        );
+        return { toolUseId: call.id, ok: true, output };
+      }
+      case "diagram_add_nodes": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramAddNodes(
+          coerceDiagramAddNodesInput(call.input),
+        );
+        return { toolUseId: call.id, ok: true, output };
+      }
+      case "diagram_layout": {
+        useSenecaStore.getState().setActiveTab("diagrams", { pulse: true });
+        const output = await applyDiagramLayout(
+          coerceDiagramLayoutInput(call.input),
+        );
+        return { toolUseId: call.id, ok: true, output };
       }
       case "map_fly_to": {
         useSenecaStore.getState().setActiveTab("map", { pulse: true });
         applyMapFlyTo(coerceFlyToInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        return { toolUseId: call.id, ok: true, output: mapStateOutput() };
       }
       case "map_drop_pin": {
         useSenecaStore.getState().setActiveTab("map", { pulse: true });
         applyMapDropPin(coerceDropPinInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        return { toolUseId: call.id, ok: true, output: mapStateOutput() };
       }
       case "map_draw_shape": {
         useSenecaStore.getState().setActiveTab("map", { pulse: true });
         applyMapDrawShape(coerceDrawShapeInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        return { toolUseId: call.id, ok: true, output: mapStateOutput() };
       }
       case "map_set_layer": {
         useSenecaStore.getState().setActiveTab("map", { pulse: true });
         applyMapSetLayer(coerceSetLayerInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        return { toolUseId: call.id, ok: true, output: mapStateOutput() };
       }
       case "web_navigate": {
         useSenecaStore.getState().setActiveTab("web", { pulse: true });
-        await applyWebNavigate(coerceNavigateInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        const input = coerceNavigateInput(call.input);
+        await applyWebNavigate(input);
+        useSenecaStore.getState().setWebSearchOverlayOpen(false);
+        return {
+          toolUseId: call.id,
+          ok: true,
+          output: webNavigateOutput(input.url),
+        };
       }
       case "web_search": {
         useSenecaStore.getState().setActiveTab("web", { pulse: true });
-        await applyWebSearch(coerceSearchInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        const input = coerceSearchInput(call.input);
+        const results = await applyWebSearch(input);
+        useSenecaStore.getState().setWebSearchOverlayOpen(true);
+        return {
+          toolUseId: call.id,
+          ok: true,
+          output: webSearchOutput(input.query, results),
+        };
       }
       case "web_read_page": {
-        // Server-fulfilled: the agent loop in apps/api/src/routes/chat.ts
-        // resolves this against its own webProxy + extractTextFromHtml
-        // and feeds the page text directly into the next iteration's
-        // tool_result. The client only needs to acknowledge the call so
-        // the chip turns green; we deliberately don't re-fetch here.
         useSenecaStore.getState().setActiveTab("web", { pulse: true });
         return { toolUseId: call.id, ok: true };
       }
       case "document_go_to_page": {
         useSenecaStore.getState().setActiveTab("documents", { pulse: true });
-        applyDocumentGoToPage(coerceGoToPageInput(call.input));
-        return { toolUseId: call.id, ok: true };
+        const input = coerceGoToPageInput(call.input);
+        applyDocumentGoToPage(input);
+        return {
+          toolUseId: call.id,
+          ok: true,
+          output: documentGoToPageOutput(input.page, input.document_id),
+        };
       }
       case "document_read_page": {
-        // Server-fulfilled: the agent loop in apps/api/src/routes/chat.ts
-        // resolves this against the documentTextStore (and falls back to
-        // server-side page rendering for scanned PDFs). The client only
-        // needs to acknowledge the call so the chip turns green; we
-        // deliberately don't try to read the PDF in the browser.
         useSenecaStore.getState().setActiveTab("documents", { pulse: true });
         return { toolUseId: call.id, ok: true };
       }
       case "document_list": {
-        // Server-fulfilled: the agent loop projects the session's
-        // DocumentsState into the tool_result so Seneca knows what is
-        // loaded. The client just pulses the tab so the user sees Seneca
-        // is checking the document state.
         useSenecaStore.getState().setActiveTab("documents", { pulse: true });
         return { toolUseId: call.id, ok: true };
       }
       case "document_search": {
-        // Server-fulfilled: the agent loop runs a substring search over
-        // every extracted page in the session and returns ranked hits.
-        // Client just acknowledges the chip.
         useSenecaStore.getState().setActiveTab("documents", { pulse: true });
         return { toolUseId: call.id, ok: true };
       }
       case "document_create": {
-        // Server-fulfilled (Phase 6 / Priority 1d): the agent loop
-        // persists the AI-authored markdown inline (no Storage blob)
-        // and pushes the updated DocumentsState back on the next turn's
-        // session row. The client pulses the tab so the user sees the
-        // new entry land in the sidebar. The session reload on the next
-        // turn boundary refreshes the in-memory `DocumentsState`.
         useSenecaStore.getState().setActiveTab("documents", { pulse: true });
         return { toolUseId: call.id, ok: true };
       }

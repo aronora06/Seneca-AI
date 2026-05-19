@@ -152,6 +152,7 @@ export function WebTab() {
         setViewMode("live");
         if (next.staticHtml) writeStaticHtml(next.staticHtml);
         setSearch(null);
+        useSenecaStore.getState().setWebSearchOverlayOpen(false);
         const finalUrl = next.finalUrl || url;
 
         if (recordHistory) {
@@ -237,8 +238,14 @@ export function WebTab() {
         setIframeKey((n) => n + 1);
         await navigateInternal(url, { recordHistory: false });
       },
-      showSearchResults: (query, results) => setSearch({ query, results }),
-      clearSearchResults: () => setSearch(null),
+      showSearchResults: (query, results) => {
+        setSearch({ query, results });
+        useSenecaStore.getState().setWebSearchOverlayOpen(true);
+      },
+      clearSearchResults: () => {
+        setSearch(null);
+        useSenecaStore.getState().setWebSearchOverlayOpen(false);
+      },
     };
     setWebApi(api);
 
@@ -315,7 +322,7 @@ export function WebTab() {
   const showReaderToggle = engine === "headless";
 
   return (
-    <div ref={containerRef} className="flex h-full w-full flex-col bg-surface">
+    <div ref={containerRef} className="flex h-full w-full flex-col bg-transparent">
       <WebUrlBar
         url={currentUrl}
         loading={loading}

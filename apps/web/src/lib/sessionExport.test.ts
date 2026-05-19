@@ -16,6 +16,7 @@ const BASE: SessionRecord = {
   name: "Spinoza Letters",
   transcript: [],
   whiteboard: { elements: [] },
+  diagrams: { xml: "<mxGraphModel><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/></root></mxGraphModel>" },
   map: { center: [0, 0], zoom: 1, layer: "standard", pins: [], shapes: [] },
   web: { url: null, history: [], historyIndex: -1 },
   documents: { items: [], activeId: null },

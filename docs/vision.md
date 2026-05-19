@@ -120,11 +120,16 @@ These are concrete scenarios the MVP must support end-to-end:
 ```
 
 **Key data flow — the vision toggle:**
-1. User toggles 👁 on.
-2. Frontend captures current canvas state (Excalidraw scene JSON, current PDF page rendered to image, map screenshot via `leaflet-image`, etc.) and serializes to a single image (HTML canvas → PNG).
-3. Image attached to next Claude API call as a base64 image input.
-4. Claude responds with text + structured "actions" (see §8.7).
-5. Toggle returns to off after the response unless user pins it.
+1. User toggles 👁 on (Once or Locked).
+2. Frontend captures the **active tab only** (Excalidraw → PNG, PDF page canvas, map div via `html-to-image`, web iframe / headless screenshot, etc.) and downscales to ≤1568×1568.
+3. Image attached to the next Claude API call as a base64 image input.
+4. Claude responds with text + tool-use actions (see §8.7).
+5. "Once" reverts to off after the response; "Locked" stays on until the user switches it off.
+
+**Key data flow — workspace context (vision off or as supplement):**
+1. On every user turn the client builds a structured `workspaceContext` snapshot from Zustand (active tab, theme, whiteboard background + recommended stroke + viewport + element digest, map centre/pins, document list + text/index status, web URL / search overlay, voice mode).
+2. The API merges it into the system prompt as `<workspace_context>` — cheap structured state, not pixels. Seneca treats it as ground truth when vision is off.
+3. After client-fulfilled tools run, structured `tool_result.output` (placement bounds, search hits, map state, etc.) reaches Seneca on the **next** user turn alongside any error strings.
 
 **Key data flow — AI takes action on canvas:**
 1. Claude returns response with embedded action blocks: `<action type="whiteboard.draw" payload="..."/>`, `<action type="map.fly_to" payload="..."/>`, etc.
@@ -191,8 +196,8 @@ Acceptance criteria:
 Acceptance criteria:
 - [ ] Eye icon (👁) toggle visible in voice pane.
 - [ ] Default state: OFF.
-- [ ] When OFF: no canvas image is sent with API requests.
-- [ ] When ON: next outgoing user message includes a snapshot of the active canvas tab.
+- [ ] When OFF: no canvas image is sent with API requests; a structured `workspaceContext` block is still sent so Seneca knows tab, theme, and canvas facts without pixels.
+- [ ] When ON: next outgoing user message includes a snapshot of the active canvas tab (plus `workspaceContext` as supplement).
 - [ ] After the response returns, toggle automatically reverts to OFF unless the user has pinned it.
 - [ ] Pinned state shows visually distinct (e.g., solid eye icon vs. outline).
 - [ ] Vision capture works for all canvas tabs (whiteboard, doc, web, map).
@@ -267,6 +272,7 @@ Acceptance criteria:
   - `map.draw_shape`
   - `tab.switch`
 - [ ] Failed actions log gracefully and the AI is notified in the next turn so it can recover.
+- [ ] Successful client actions may return structured `tool_result.output` on the next turn (e.g. measured whiteboard bounds, search results) so the AI can verify placement without vision.
 
 ### 8.9 Tab System
 
@@ -336,7 +342,7 @@ Acceptance criteria:
 These need a call before relevant work begins. Surface them; don't quietly resolve them.
 
 1. **Action protocol format.** Anthropic's tool-use API vs. embedded XML tags in response text. Recommend tool-use for structure; flag if it complicates streaming.
-2. **Whiteboard image vs. scene JSON for vision.** Sending the Excalidraw scene JSON might be cheaper and more accurate than a rendered PNG. Test both.
+2. **Whiteboard image vs. scene JSON for vision.** Vision still uses PNG for the active tab. A compact scene digest (≤20 elements + viewport bounds) ships in `workspaceContext` when vision is off — cheaper than full scene JSON, sufficient for placement and layout questions. Full scene-JSON-as-vision-input remains an experiment.
 3. **Web proxy depth.** How aggressively do we sanitize? Strip all JS, or allow some? Decision: strip all JS for MVP, document the limitation.
 4. **TTS quality.** Browser TTS is robotic. At what point do we upgrade to ElevenLabs? Decision: ship browser TTS, upgrade only if it actively breaks usability.
 5. **System prompt.** Single hardcoded prompt for MVP, or a "persona picker"? Decision: hardcoded Seneca persona for MVP — Stoic, warm, rigorous, patient correspondent who thinks alongside the user. Prompt should explicitly establish identity ("You are Seneca…") and the collaborative interlocutor stance. Domain modes (philosophy / geopolitics / etc.) handled by user request within conversation, not as separate personas. Multi-persona switching deferred to Phase 2.

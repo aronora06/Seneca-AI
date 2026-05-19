@@ -34,6 +34,7 @@ import {
   TavilyRequestError,
 } from "../lib/tavily.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
+import { rateLimit } from "../middleware/rateLimit.js";
 
 export const webRouter = Router();
 
@@ -89,6 +90,7 @@ webRouter.get(
 webRouter.post(
   "/api/web/render",
   requireAuth,
+  rateLimit("render"),
   async (req: AuthedRequest, res: Response) => {
     if (!req.user) {
       res.status(401).end();

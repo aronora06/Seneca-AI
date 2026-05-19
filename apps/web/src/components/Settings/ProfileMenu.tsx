@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
+import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthProvider";
 import { usePrefs } from "../../lib/userPreferences";
@@ -25,6 +26,7 @@ function displayLabel(name: string, email: string | null): string {
 }
 
 export function ProfileMenu() {
+  const navigate = useNavigate();
   const { user, signOut, bypass } = useAuth();
   const prefs = usePrefs();
 
@@ -117,7 +119,9 @@ export function ProfileMenu() {
                   danger
                   onClick={() => {
                     setOpen(false);
-                    void signOut();
+                    void signOut().then(() => {
+                      navigate("/login", { replace: true });
+                    });
                   }}
                 />
               </MenuGroup>

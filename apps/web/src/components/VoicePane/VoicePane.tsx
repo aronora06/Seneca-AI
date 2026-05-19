@@ -12,13 +12,29 @@ import { ELEVENLABS_USD_PER_CHAR } from "@seneca/shared";
 import { useSenecaStore } from "../../store/seneca";
 import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
 import { useSpeech } from "../../hooks/useSpeech";
-import { runTurn } from "../../lib/runTurn";
+import { useConversationVad } from "../../hooks/useConversationVad";
+import { abortActiveTurn, runTurn } from "../../lib/runTurn";
+import { ttsLog, ttsLogReset } from "../../lib/ttsTimeline";
+import {
+  cancelConversationModeSubmit,
+  scheduleConversationModeSubmit,
+} from "../../lib/conversationSubmit";
 import { usePrefs, writePrefs } from "../../lib/userPreferences";
+import { toast } from "../Toast/toastStore";
 
+import {
+  useVoiceActivityFromStore,
+  type VoiceActivityPhase,
+} from "../../hooks/useVoiceActivity";
 import { TranscriptList } from "./TranscriptList";
 import { VisionToggle } from "./VisionToggle";
 import { DictationField } from "./DictationField";
-import { Waveform } from "./Waveform";
+import { ConversationHint } from "./ConversationHint";
+import { FloatingVoiceDock } from "./FloatingVoiceDock";
+import { SenecaActivityBeacon } from "./SenecaActivityBeacon";
+import { SenecaSpeechIndicator } from "./SenecaSpeechIndicator";
+import { UserSpeechIndicator } from "./UserSpeechIndicator";
+import { CollapsedActivityIndicators } from "./CollapsedActivityIndicators";
 
 /**
  * Voice pane — Phase B dictation surface.
@@ -45,6 +61,7 @@ export function VoicePane() {
   );
   const setInterimSpeech = useSenecaStore((s) => s.setInterimSpeech);
   const setVoiceMode = useSenecaStore((s) => s.setVoiceMode);
+  const setVoiceActivity = useSenecaStore((s) => s.setVoiceActivity);
   const activeTurnId = useSenecaStore((s) => s.streaming.activeTurnId);
   const sessionId = useSenecaStore((s) => s.session.id);
 
@@ -52,6 +69,7 @@ export function VoicePane() {
   const editBeforeSend = prefs.editBeforeSend;
   const vadEnabled = prefs.vadEnabled;
   const pttKey = prefs.pttKey || " ";
+  const conversationMode = prefs.conversationMode;
   const bumpTtsUsage = useSenecaStore((s) => s.bumpTtsUsage);
 
   const tts = useSpeech({
@@ -67,6 +85,8 @@ export function VoicePane() {
   // without re-binding the recognizer on every keystroke.
   const textRef = useRef(text);
   textRef.current = text;
+  const interimRef = useRef(interim);
+  interimRef.current = interim;
 
   const submitText = useCallback(
     async (raw: string) => {
@@ -76,11 +96,21 @@ export function VoicePane() {
       submittingRef.current = true;
       setText("");
       setInterim("");
+      // Drop any in-flight audio from a prior turn — otherwise sentences
+      // queue behind a slow pump and play long after the user moved on.
+      tts.clear();
+      ttsLogReset();
+      ttsLog("user.submit", { chars: trimmed.length, preview: trimmed.slice(0, 72) });
       try {
         await runTurn({
           userText: trimmed,
-          onSpoken: (full) => {
-            tts.speak(full);
+          onSpoken: (chunk) => {
+            ttsLog("runTurn.onSpoken", {
+              chars: chunk.length,
+              preview: chunk.slice(0, 72),
+              activeTurnId: useSenecaStore.getState().streaming.activeTurnId,
+            });
+            tts.speak(chunk);
           },
         });
       } finally {
@@ -100,17 +130,29 @@ export function VoicePane() {
     });
   }, []);
 
-  // Three input behaviours:
+  // Four input behaviours:
+  //   - Conversation Mode (Phase G, when prefs.conversationMode is on):
+  //     a real Silero VAD owns turn boundaries. The recognizer's finals
+  //     stream into the textarea for visual feedback; the VAD's
+  //     `onSpeechEnd` callback fires the submit a moment later. The
+  //     recognizer's own silence-based callback is suppressed (we'd
+  //     just be racing the VAD).
   //   - Edit-before-send (default): finals stream into the textarea
   //     and the user reviews / sends manually.
-  //   - Hands-free + VAD: finals accumulate in the textarea and the
-  //     silence callback fires the submit once the user stops talking.
+  //   - Hands-free + recognizer-VAD: finals accumulate in the textarea
+  //     and the recognizer's silence callback fires the submit once
+  //     the user stops talking.
   //   - Hands-free without VAD: legacy auto-submit on every final.
-  const handsFreeWithVad = !editBeforeSend && vadEnabled;
+  const handsFreeWithVad = !conversationMode && !editBeforeSend && vadEnabled;
+  // In Conversation Mode the recognizer also accumulates finals into
+  // the textarea — the user wants to *see* what was heard while they
+  // were talking — but submission is owned by the VAD, not by the
+  // recognizer's silence timer.
+  const accumulateFinals = conversationMode || editBeforeSend || handsFreeWithVad;
 
   const stt = useSpeechRecognition({
     onFinal: (final) => {
-      if (editBeforeSend || handsFreeWithVad) {
+      if (accumulateFinals) {
         appendDictation(final);
         return;
       }
@@ -130,9 +172,10 @@ export function VoicePane() {
       if (!pending) return;
       void submitText(pending);
     },
-    // Disable the silence callback unless we're in the hands-free + VAD
-    // path so a quiet pause during edit-before-send dictation never
-    // auto-submits a half-written thought.
+    // Disable the recognizer's silence callback unless we're in the
+    // *recognizer-VAD* path so a quiet pause never auto-submits a
+    // half-written thought. Conversation Mode uses its own Silero VAD
+    // for the same job, much more accurately.
     silenceMs: handsFreeWithVad ? 1500 : 0,
   });
 
@@ -142,42 +185,222 @@ export function VoicePane() {
     setInterimSpeech(stt.interim);
   }, [stt.interim, setInterimSpeech]);
 
-  // Mirror voice mode for the AppShell-level status pill.
+  // Conversation Mode (Phase G) — Silero VAD owns barge-in and
+  // turn-end detection. The VAD lives next to the recognizer; the
+  // recognizer still does transcription but no longer decides when
+  // the user is talking. See `useConversationVad.ts` for the
+  // rationale on why we need a real VAD instead of the recognizer's
+  // interim-text heuristic.
+  const ttsRef = useRef(tts);
+  ttsRef.current = tts;
+  const submitTextRef = useRef(submitText);
+  submitTextRef.current = submitText;
+  const activeTurnIdRef = useRef(activeTurnId);
+  activeTurnIdRef.current = activeTurnId;
+  const conversationModeRef = useRef(conversationMode);
+  conversationModeRef.current = conversationMode;
+  const vadSubmitTimerRef = useRef<number | null>(null);
+  const vadBargeInAtRef = useRef(0);
+
+  /** Silero VAD for barge-in when legacy continuous + hands-free (STT is off during TTS). */
+  const legacyBargeInVad =
+    continuousListening && vadEnabled && !conversationMode;
+
+  const vad = useConversationVad({
+    onSpeechStart: () => {
+      // The user just started talking. If TTS is mid-utterance or a
+      // turn is streaming, treat it as barge-in: clear audio, abort
+      // the LLM stream. Otherwise this is just the start of a normal
+      // turn — nothing to interrupt.
+      const t = ttsRef.current;
+      if (t.audioActive || t.speaking || activeTurnIdRef.current) {
+        const now = performance.now();
+        if (now - vadBargeInAtRef.current < 800) return;
+        vadBargeInAtRef.current = now;
+        ttsLog("bargeIn.vad", {
+          conversationMode: conversationModeRef.current,
+        });
+        t.clear();
+        abortActiveTurn("user_barge_in");
+      }
+      cancelConversationModeSubmit(vadSubmitTimerRef);
+    },
+    onSpeechEnd: () => {
+      if (!conversationModeRef.current) return;
+      scheduleConversationModeSubmit({
+        getPendingText: () => textRef.current,
+        getSttInterim: () => interimRef.current,
+        submit: (pending) => void submitTextRef.current(pending),
+        timer: vadSubmitTimerRef,
+      });
+    },
+    onVadMisfire: () => {
+      cancelConversationModeSubmit(vadSubmitTimerRef);
+    },
+    positiveSpeechThreshold: 0.5,
+    negativeSpeechThreshold: 0.35,
+    minSpeechFrames: 3,
+  });
+
+  // Mirror voice mode for workspace context / status affordances.
   useEffect(() => {
-    if (stt.isListening) setVoiceMode("listening");
-    else if (tts.speaking) setVoiceMode("speaking");
+    const userListening =
+      stt.isListening || (conversationMode && vad.isSpeaking);
+    if (userListening) setVoiceMode("listening");
+    else if (tts.audioActive) setVoiceMode("speaking");
+    else if (activeTurnId) setVoiceMode("thinking");
     else setVoiceMode("idle");
-  }, [stt.isListening, tts.speaking, setVoiceMode]);
+  }, [
+    stt.isListening,
+    conversationMode,
+    vad.isSpeaking,
+    tts.audioActive,
+    activeTurnId,
+    setVoiceMode,
+  ]);
 
-  // Speech interruption — when the user starts talking while Seneca is
-  // mid-sentence, pause TTS so the back-and-forth feels natural. We
-  // resume on stt.stop unless the user actually submitted (in which
-  // case clear() will run as part of submitText). The pause is light:
-  // we only resume if no further user-input action has cleared the
-  // queue.
-  const wasPausedForListeningRef = useRef(false);
+  // Conversation Mode lifecycle — full VAD (barge-in + auto-submit).
   useEffect(() => {
-    if (stt.isListening && tts.speaking && !tts.paused) {
-      tts.pause();
-      wasPausedForListeningRef.current = true;
-    } else if (!stt.isListening && wasPausedForListeningRef.current) {
-      wasPausedForListeningRef.current = false;
-      if (tts.paused) tts.resume();
+    if (!conversationMode) {
+      cancelConversationModeSubmit(vadSubmitTimerRef);
+      return;
     }
-  }, [stt.isListening, tts]);
+    let cancelled = false;
+    void vad.start().then((res) => {
+      if (cancelled || res.ok) return;
+      writePrefs({ conversationMode: false });
+      toast.error({
+        title: "Could not start Conversation Mode",
+        description:
+          res.error.length > 200 ? res.error.slice(0, 200) + "…" : res.error,
+      });
+    });
+    return () => {
+      cancelled = true;
+      if (!legacyBargeInVad) vad.stop();
+    };
+  }, [conversationMode, legacyBargeInVad, vad]);
 
+  // Legacy continuous + hands-free: keep Silero VAD running for barge-in
+  // while STT is muted during TTS playback.
+  useEffect(() => {
+    if (!legacyBargeInVad) {
+      if (!conversationMode) vad.stop();
+      return;
+    }
+    let cancelled = false;
+    void vad.start().then((res) => {
+      if (cancelled || res.ok) return;
+      console.warn("[seneca] VAD barge-in failed to start", res.error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [legacyBargeInVad, conversationMode, vad]);
+
+  // While TTS is playing, raise the VAD's positive threshold so faint
+  // TTS leakage through the laptop speakers doesn't trip a false
+  // barge-in. Loud, deliberate user speech still triggers. When TTS
+  // stops, drop the threshold back to the sensitive default so
+  // normal-volume speech is detected promptly.
+  useEffect(() => {
+    if (!vad.isReady) return;
+    if (!conversationMode && !legacyBargeInVad) return;
+    vad.setActivationThreshold(tts.audioActive ? 0.72 : 0.5);
+  }, [conversationMode, legacyBargeInVad, vad, tts.audioActive]);
+
+  // Legacy interim barge-in — fallback when Silero VAD is unavailable.
+  //
+  // Production-grade voice agents (OpenAI Realtime, ElevenLabs
+  // Conversational AI, Pi) all implement the same four-step
+  // barge-in contract:
+  //
+  //   1. Detect the user is actually talking (not just "mic on").
+  //   2. Stop TTS playback immediately (clear, not pause).
+  //   3. Abort any in-flight LLM stream — don't keep paying for
+  //      tokens the user will never hear.
+  //   4. The interrupted message stays in the transcript with an
+  //      `interrupted: true` flag so the next turn's context
+  //      tells the model it was cut short.
+  const userIsSpeaking = stt.isListening && stt.interim.trim().length > 0;
+  const bargeInDebounceRef = useRef<number | null>(null);
+  const bargeFiredRef = useRef(false);
+  useEffect(() => {
+    if (conversationMode) return;
+    if (vadEnabled && vad.isReady) return;
+    if (!userIsSpeaking) {
+      if (bargeInDebounceRef.current !== null) {
+        window.clearTimeout(bargeInDebounceRef.current);
+        bargeInDebounceRef.current = null;
+      }
+      bargeFiredRef.current = false;
+      return;
+    }
+
+    // Only interrupt when Seneca is actually playing audio. Using
+    // `activeTurnId` alone caused false barge-ins during the gap between
+    // TTS sentences (or during tool waits) when STT picked up breath/noise
+    // — that cleared the queue and aborted the stream while text kept going.
+    if (!tts.audioActive && !tts.speaking) return;
+    const interimLen = stt.interim.trim().length;
+    if (interimLen < 10) return;
+    if (bargeFiredRef.current) return;
+    if (bargeInDebounceRef.current !== null) return;
+
+    bargeInDebounceRef.current = window.setTimeout(() => {
+      bargeInDebounceRef.current = null;
+      bargeFiredRef.current = true;
+      ttsLog("bargeIn.legacy", { interimLen });
+      tts.clear();
+      abortActiveTurn("user_barge_in");
+    }, 400);
+
+    return () => {
+      if (bargeInDebounceRef.current !== null) {
+        window.clearTimeout(bargeInDebounceRef.current);
+        bargeInDebounceRef.current = null;
+      }
+    };
+  }, [conversationMode, vadEnabled, vad.isReady, userIsSpeaking, tts, activeTurnId]);
+
+  // Continuous-listening gate.
+  //
+  // Two signals must BOTH be true for the recognizer to be running:
+  //
+  //   1. The user has opted into a hands-free mode (Conversation
+  //      Mode or the legacy continuous toggle).
+  //   2. Seneca is NOT currently speaking.
+  //
+  // Condition (2) is the echo-cancellation workaround. Chrome's Web
+  // Speech Recognition runs on its own audio pipeline; we can't
+  // attach an AEC layer to it. Without AEC the mic picks up
+  // Seneca's voice through the laptop speakers and the recognizer
+  // transcribes it as "user input" — which then triggers a
+  // phantom barge-in (we used to literally interrupt Seneca with
+  // his own words). Every consumer voice agent solves this the
+  // same way: don't listen while you're talking. The user can
+  // still interrupt by pressing the push-to-talk key or clicking
+  // the mic button; both call `stt.start()` directly and bypass
+  // this gate. In Conversation Mode the Silero VAD owns barge-in
+  // separately, so we don't need to keep the recognizer running
+  // through TTS playback.
   useEffect(() => {
     if (!stt.supported) return;
-    stt.setContinuous(continuousListening);
-  }, [continuousListening, stt]);
+    const wantsListening = conversationMode || continuousListening;
+    const shouldListen = wantsListening && !tts.audioActive;
+    stt.setContinuous(shouldListen);
+  }, [conversationMode, continuousListening, tts.audioActive, stt]);
 
   // Phase B — global push-to-talk key. Hold the configured key (default
   // spacebar) to start listening when no editable input is focused;
   // release to stop. Skips key repeats so a long hold doesn't cycle.
+  // Disabled in Conversation Mode and in legacy continuous mode —
+  // both already own the recognizer.
   const pttActiveRef = useRef(false);
   useEffect(() => {
     if (!stt.supported) return;
-    if (continuousListening) return; // continuous owns the recognizer
+    if (conversationMode) return;
+    if (continuousListening) return;
 
     const matchesPtt = (e: KeyboardEvent): boolean => {
       // Match by `key` (Space, "a", "Enter", etc). Case-insensitive for
@@ -221,7 +444,7 @@ export function VoicePane() {
       window.removeEventListener("keyup", handleUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [stt, pttKey, continuousListening]);
+  }, [stt, pttKey, continuousListening, conversationMode]);
 
   const onFormSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -229,11 +452,11 @@ export function VoicePane() {
   };
 
   const pttDown = () => {
-    if (!stt.supported || continuousListening) return;
+    if (!stt.supported || continuousListening || conversationMode) return;
     stt.start();
   };
   const pttUp = () => {
-    if (!stt.supported || continuousListening) return;
+    if (!stt.supported || continuousListening || conversationMode) return;
     stt.stop();
   };
 
@@ -243,10 +466,22 @@ export function VoicePane() {
 
   const paneSide = dockSide === "left" ? "border-r" : "border-l";
 
+  const activity = useVoiceActivityFromStore({
+    sttListening: stt.isListening,
+    sttInterim: interim,
+    vadSpeaking: conversationMode && vad.isSpeaking,
+    ttsSpeaking: tts.audioActive,
+  });
+  const playbackReactive = tts.engine === "elevenlabs";
+
+  useEffect(() => {
+    setVoiceActivity(activity.phase, activity.label);
+  }, [activity.phase, activity.label, setVoiceActivity]);
+
   return (
     <aside
       className={clsx(
-        "flex h-full flex-col border-border bg-card/60 backdrop-blur",
+        "relative z-10 flex h-full flex-col border-border bg-card/35 backdrop-blur-md",
         paneSide,
         collapsed ? "w-14" : "w-[380px]",
         "shrink-0 transition-[width] duration-200",
@@ -260,11 +495,46 @@ export function VoicePane() {
       />
 
       {collapsed ? (
-        <CollapsedStrip
-          isListening={stt.isListening}
-          isSpeaking={tts.speaking}
-          turnActive={!!activeTurnId}
-        />
+        <>
+          <CollapsedStrip
+            dockSide={dockSide}
+            phase={activity.phase}
+            fancy={activity.showFancy}
+            playbackReactive={playbackReactive}
+          />
+          <FloatingVoiceDock
+            dockSide={dockSide}
+            sttSupported={stt.supported}
+            isListening={
+              stt.isListening || (conversationMode && vad.isSpeaking)
+            }
+            phase={activity.phase}
+            showFancy={activity.showFancy}
+            playbackReactive={playbackReactive}
+            userActive={activity.userActive}
+            senecaSpeaking={activity.senecaSpeaking}
+            senecaWorking={activity.senecaWorking}
+            continuous={continuousListening}
+            handsFree={!editBeforeSend}
+            muted={tts.muted}
+            conversationMode={conversationMode}
+            conversationVadReady={vad.isReady}
+            conversationVadSpeaking={vad.isSpeaking}
+            onExpand={toggleCollapsed}
+            onPttDown={pttDown}
+            onPttUp={pttUp}
+            onToggleContinuous={setContinuousListening}
+            onToggleHandsFree={(next) => setEditBeforeSend(!next)}
+            onToggleMute={() => tts.setMuted(!tts.muted)}
+            onToggleConversation={(next) =>
+              writePrefs({
+                conversationMode: next,
+                conversationModeHintDismissed: true,
+              })
+            }
+          />
+          <ConversationHint dockSide={dockSide} visible={true} />
+        </>
       ) : (
         <>
           {!stt.supported && (
@@ -279,7 +549,28 @@ export function VoicePane() {
             </div>
           )}
 
-          <TranscriptList />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {activity.label && (
+              <p className="sr-only" aria-live="polite">
+                {activity.label}
+              </p>
+            )}
+            <SenecaActivityBeacon
+              phase={activity.phase}
+              fancy={activity.showFancy}
+              label={activity.senecaWorking ? activity.label : null}
+            />
+            {activity.senecaSpeaking && (
+              <div className="flex shrink-0 px-4 pt-2">
+                <SenecaSpeechIndicator
+                  active
+                  fancy={activity.showFancy}
+                  playbackReactive={playbackReactive}
+                />
+              </div>
+            )}
+            <TranscriptList />
+          </div>
 
           <div className="space-y-2 border-t border-border px-3 py-3">
             <div className="flex items-center gap-2">
@@ -290,33 +581,41 @@ export function VoicePane() {
                 onDown={pttDown}
                 onUp={pttUp}
               />
-              <Waveform
-                active={stt.isListening}
-                className="inline-flex items-center"
-              />
-              <ContinuousToggle
-                supported={stt.supported}
-                continuous={continuousListening}
-                onChange={setContinuousListening}
-              />
-              <HandsFreeToggle
-                supported={stt.supported}
-                handsFree={!editBeforeSend}
-                onChange={(next) => setEditBeforeSend(!next)}
+              <div className="flex flex-col gap-0.5">
+                <ContinuousToggle
+                  supported={stt.supported}
+                  continuous={continuousListening}
+                  onChange={setContinuousListening}
+                />
+                <HandsFreeToggle
+                  supported={stt.supported}
+                  handsFree={!editBeforeSend}
+                  onChange={(next) => setEditBeforeSend(!next)}
+                />
+              </div>
+              <UserSpeechIndicator
+                active={activity.userActive}
+                fancy={activity.showFancy}
+                className="shrink-0"
               />
               <div className="flex-1" />
               <VisionToggle />
             </div>
 
             <SpeechControls
-              speaking={tts.speaking}
+              speaking={tts.speaking || tts.audioActive}
               paused={tts.paused}
               muted={tts.muted}
               engine={tts.engine}
               setMuted={tts.setMuted}
               pause={tts.pause}
               resume={tts.resume}
-              skip={tts.skip}
+              skip={() => {
+                tts.skip();
+                if (useSenecaStore.getState().streaming.activeTurnId) {
+                  abortActiveTurn("user_skip");
+                }
+              }}
               pttKey={pttKey}
               showShortcutHint={stt.supported && !continuousListening}
             />
@@ -330,8 +629,8 @@ export function VoicePane() {
                 value={text}
                 onChange={setText}
                 interim={stt.isListening && editBeforeSend ? interim : ""}
-                disabled={!!activeTurnId}
-                placeholderActive="Seneca is thinking…"
+                disabled={false}
+                placeholderActive="Seneca is thinking… type to interrupt"
                 placeholderIdle={
                   stt.supported
                     ? "Type or hold the mic to dictate — Enter sends"
@@ -342,7 +641,7 @@ export function VoicePane() {
               <button
                 type="submit"
                 className="btn-primary h-10"
-                disabled={!text.trim() || !!activeTurnId || !sessionId}
+                disabled={!text.trim() || !sessionId}
               >
                 Send
               </button>
@@ -394,31 +693,20 @@ function PaneHeader(props: {
 }
 
 function CollapsedStrip(props: {
-  isListening: boolean;
-  isSpeaking: boolean;
-  turnActive: boolean;
+  dockSide: "left" | "right";
+  phase: VoiceActivityPhase;
+  fancy: boolean;
+  playbackReactive: boolean;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center gap-3 py-3 text-xs text-fg-subtle">
-      <div className="font-serif text-base text-fg-muted">S</div>
-      {props.isListening && (
-        <span
-          className="h-2 w-2 animate-pulse rounded-full bg-danger"
-          title="Listening"
-        />
-      )}
-      {props.isSpeaking && (
-        <span
-          className="h-2 w-2 animate-pulse rounded-full bg-accent"
-          title="Speaking"
-        />
-      )}
-      {props.turnActive && !props.isSpeaking && (
-        <span
-          className="h-2 w-2 animate-pulse rounded-full bg-fg-subtle/60"
-          title="Thinking"
-        />
-      )}
+    <div className="flex flex-1 flex-col items-center text-xs text-fg-subtle">
+      <div className="py-3 font-serif text-base text-fg-muted">S</div>
+      <CollapsedActivityIndicators
+        phase={props.phase}
+        fancy={props.fancy}
+        dockSide={props.dockSide}
+        playbackReactive={props.playbackReactive}
+      />
     </div>
   );
 }

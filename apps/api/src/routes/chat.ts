@@ -7,7 +7,12 @@ import type {
   ToolResult,
   WebState,
 } from "@seneca/shared";
-import { ALL_TOOLS, SENECA_SYSTEM_PROMPT } from "@seneca/shared";
+import {
+  ALL_TOOLS,
+  formatWorkspaceContextForPrompt,
+  SENECA_SYSTEM_PROMPT,
+} from "@seneca/shared";
+import type { WorkspaceContext } from "@seneca/shared";
 
 import { anthropic, ANTHROPIC_MAX_TOKENS } from "../lib/anthropic.js";
 import { documentChunkStore } from "../lib/documentChunkStore.js";
@@ -22,6 +27,7 @@ import {
 import { renderPdfPageToPng } from "../lib/pdfPageRenderer.js";
 import { computeCostUSD } from "../lib/pricing.js";
 import { openSseStream } from "../lib/sse.js";
+import { resolveDiagramRead } from "../lib/diagramRead.js";
 import { sessionStore } from "../lib/sessionStore.js";
 import {
   embed,
@@ -33,17 +39,33 @@ import {
   WebProxyError,
 } from "../lib/webProxy.js";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
+import { rateLimit } from "../middleware/rateLimit.js";
+import {
+  assertWithinDailyCap,
+  peekDailyCost,
+  recordDailyCost,
+} from "../lib/costCap.js";
 import { env } from "../env.js";
 
 export const chatRouter = Router();
 
-chatRouter.post("/api/chat", requireAuth, (req, res) => {
-  void handleTurn(req as AuthedRequest, res, { withVision: false });
-});
+chatRouter.post(
+  "/api/chat",
+  requireAuth,
+  rateLimit("chat"),
+  (req, res) => {
+    void handleTurn(req as AuthedRequest, res, { withVision: false });
+  },
+);
 
-chatRouter.post("/api/vision", requireAuth, (req, res) => {
-  void handleTurn(req as AuthedRequest, res, { withVision: true });
-});
+chatRouter.post(
+  "/api/vision",
+  requireAuth,
+  rateLimit("vision"),
+  (req, res) => {
+    void handleTurn(req as AuthedRequest, res, { withVision: true });
+  },
+);
 
 interface HandlerOptions {
   withVision: boolean;
@@ -51,25 +73,29 @@ interface HandlerOptions {
 
 function buildSystemPrompt(
   instructions?: { aboutYou: string; howToRespond: string },
+  workspace?: WorkspaceContext,
 ): string {
-  if (
-    !instructions ||
-    (!instructions.aboutYou.trim() && !instructions.howToRespond.trim())
-  ) {
-    return SENECA_SYSTEM_PROMPT;
+  const parts: string[] = [SENECA_SYSTEM_PROMPT];
+  if (workspace) {
+    parts.push("\n\n", formatWorkspaceContextForPrompt(workspace));
   }
-  const parts: string[] = [SENECA_SYSTEM_PROMPT, "\n\n<user_context>"];
-  if (instructions.aboutYou.trim()) {
-    parts.push(
-      `The user has shared the following about themselves:\n${instructions.aboutYou.trim()}`,
-    );
+  const hasInstructions =
+    instructions &&
+    (instructions.aboutYou.trim() || instructions.howToRespond.trim());
+  if (hasInstructions) {
+    parts.push("\n\n<user_context>");
+    if (instructions.aboutYou.trim()) {
+      parts.push(
+        `The user has shared the following about themselves:\n${instructions.aboutYou.trim()}`,
+      );
+    }
+    if (instructions.howToRespond.trim()) {
+      parts.push(
+        `The user's preferences for how you should respond:\n${instructions.howToRespond.trim()}`,
+      );
+    }
+    parts.push("</user_context>");
   }
-  if (instructions.howToRespond.trim()) {
-    parts.push(
-      `The user's preferences for how you should respond:\n${instructions.howToRespond.trim()}`,
-    );
-  }
-  parts.push("</user_context>");
   return parts.join("\n");
 }
 
@@ -145,11 +171,41 @@ async function handleTurn(
     return;
   }
 
+  // Phase F — hard daily cost cap. We check at the *start* of the
+  // turn so we never start work that the user can't pay for. The
+  // accumulator is updated when usage events come back from
+  // Anthropic; today's tab on yesterday's date won't block a brand-
+  // new day's traffic.
+  try {
+    assertWithinDailyCap(req.user.id);
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err as Error & { code?: string }).code === "cost_capped"
+    ) {
+      const state = peekDailyCost(req.user.id);
+      res.status(403).json({
+        error: err.message,
+        code: "cost_capped",
+        used: state.used,
+        cap: state.cap,
+        resetInSec: state.resetInSec,
+      });
+      return;
+    }
+    throw err;
+  }
+
   // Confirm the session belongs to this user before any expensive work.
   // We also pull the persisted web + documents state so the agent loop
   // can resolve `web_read_page` and `document_read_page` against the
   // currently-loaded URL / document without a second round-trip.
-  let sessionRow: { id: string; web: WebState; documents: DocumentsState } | null;
+  let sessionRow: {
+    id: string;
+    web: WebState;
+    documents: DocumentsState;
+    diagrams: import("@seneca/shared").DiagramsState;
+  } | null;
   try {
     sessionRow = await sessionStore.getById(
       body.sessionId,
@@ -173,7 +229,10 @@ async function handleTurn(
     opts.withVision ? (body.image ?? null) : null,
   );
 
-  const systemPrompt = buildSystemPrompt(body.customInstructions);
+  const systemPrompt = buildSystemPrompt(
+    body.customInstructions,
+    body.workspaceContext,
+  );
 
   const { send, close } = openSseStream(res);
 
@@ -333,6 +392,19 @@ async function handleTurn(
             };
           }
 
+          if (tu.name === "diagram_read") {
+            const content = resolveDiagramRead(
+              sessionRow!.diagrams.xml,
+              tu.input,
+            );
+            return {
+              type: "tool_result" as const,
+              tool_use_id: tu.id,
+              is_error: false,
+              content,
+            };
+          }
+
           if (tu.name === "document_create") {
             // Phase 6 / Priority 1d: server-fulfilled write. The resolver
             // persists the new doc inline (no Storage blob — markdown
@@ -411,6 +483,14 @@ async function handleTurn(
       req.jwt,
       turnUsage,
       cost,
+    );
+
+    // Phase F — feed the daily cost accumulator. It's per-user, in
+    // memory, and clears at UTC midnight; see costCap.ts for the
+    // limits of this approach.
+    recordDailyCost(
+      req.user.id,
+      cost.inputCostUSD + cost.outputCostUSD,
     );
 
     send({ type: "done", turnId, fullText: fullTextAcrossLoop });
@@ -1470,6 +1550,7 @@ async function accumulateSessionUsage(
  */
 export const _internals = {
   buildAnthropicMessages,
+  buildSystemPrompt,
   clampPage,
   clampMaxChars,
   clampTopK,

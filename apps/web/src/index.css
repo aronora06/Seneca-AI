@@ -49,30 +49,19 @@
     --c-ok-soft: 5 46 22;             /* emerald-950ish */
   }
 
+  html {
+    font-size: calc(var(--font-scale, 1) * 100%);
+  }
+
   html,
   body,
   #root {
     height: 100%;
   }
 
-  #root {
-    font-size: calc(var(--font-scale, 1) * 1rem);
-  }
-
   body {
-    background-color: rgb(var(--c-surface));
     color: rgb(var(--c-fg));
-    background-image: radial-gradient(
-        ellipse at top,
-        rgb(var(--c-accent) / 0.06),
-        transparent 60%
-      ),
-      radial-gradient(
-        ellipse at bottom right,
-        rgb(var(--c-fg-muted) / 0.04),
-        transparent 50%
-      );
-    background-attachment: fixed;
+    background-color: transparent;
   }
 
   :root {
@@ -81,6 +70,22 @@
   .dark {
     color-scheme: dark;
   }
+}
+
+/* Full-viewport backdrop — patterns & base tint show through translucent UI. */
+.app-backdrop {
+  background-color: rgb(var(--c-surface));
+  background-image: radial-gradient(
+      ellipse at top,
+      rgb(var(--c-accent) / 0.08),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse at bottom right,
+      rgb(var(--c-fg-muted) / 0.05),
+      transparent 50%
+    );
+  background-attachment: fixed;
 }
 
 @layer components {
@@ -113,18 +118,19 @@
   }
 }
 
-/* Background style variants controlled by a data attribute on <body>. */
-body[data-bg="flat"] {
+/* Background texture variants on the workspace backdrop layer. */
+.app-backdrop[data-bg="flat"] {
   background-image: none !important;
 }
-body[data-bg="paper"] {
+.app-backdrop[data-bg="paper"] {
   background-image:
-    url("data:image/svg+xml,%3Csvg width='200' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E") !important;
+    url("data:image/svg+xml,%3Csvg width='200' height='200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E") !important;
+  background-size: 200px 200px !important;
 }
-body[data-bg="grid"] {
+.app-backdrop[data-bg="grid"] {
   background-image:
-    radial-gradient(circle, rgb(var(--c-fg-subtle) / 0.12) 1px, transparent 1px) !important;
-  background-size: 24px 24px !important;
+    radial-gradient(circle, rgb(var(--c-fg-subtle) / 0.4) 1px, transparent 1px) !important;
+  background-size: 20px 20px !important;
 }
 
 /* Excalidraw fills its container; this ensures pointer events are crisp. */
@@ -145,4 +151,32 @@ body[data-bg="grid"] {
 }
 .tab-pulse {
   animation: tab-pulse 1.4s ease-out 2;
+}
+
+/* Phase F — toast fade-in slide-down. */
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.toast-enter {
+  animation: toast-enter 180ms ease-out;
+}
+
+/* Phase F — modal overlay fade for the shortcut overlay. */
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.overlay-fade-in {
+  animation: overlay-fade-in 140ms ease-out;
 }

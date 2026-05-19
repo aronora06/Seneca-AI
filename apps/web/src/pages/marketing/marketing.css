@@ -1,0 +1,254 @@
+/*
+ * Marketing-only styles. Imported once from MarketingLayout so the rules
+ * never reach /app. Everything is scoped under `.marketing` to be safe.
+ *
+ * Token discipline: prefer semantic tokens (--c-surface, --c-fg, --c-accent…).
+ * The handful of marketing-only tints below are explicit gradients on top of
+ * the brand accent and are intentionally documented so the workspace surface
+ * stays calm.
+ */
+
+/* ── Layout shell ──────────────────────────────────────────────────────── */
+.marketing {
+  background-color: rgb(var(--c-surface));
+  color: rgb(var(--c-fg));
+  min-height: 100%;
+}
+
+/* Ambient backdrop for the marketing surface — softer than the workspace
+   .app-backdrop so the front door reads as editorial, not dashboard. */
+.marketing-backdrop {
+  position: relative;
+  isolation: isolate;
+  background-color: rgb(var(--c-surface));
+  background-image:
+    radial-gradient(
+      60rem 40rem at 12% -10%,
+      rgb(var(--c-accent) / 0.10),
+      transparent 60%
+    ),
+    radial-gradient(
+      55rem 38rem at 95% 10%,
+      rgb(var(--c-accent-soft) / 0.08),
+      transparent 55%
+    ),
+    radial-gradient(
+      70rem 50rem at 50% 110%,
+      rgb(var(--c-fg-muted) / 0.06),
+      transparent 60%
+    );
+  background-attachment: fixed;
+}
+
+.marketing-backdrop::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  mix-blend-mode: multiply;
+  opacity: 0.6;
+}
+
+.dark .marketing-backdrop::before {
+  mix-blend-mode: screen;
+  opacity: 0.35;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.marketing-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  border-bottom: 1px solid rgb(var(--c-border) / 0);
+  background-color: rgb(var(--c-surface) / 0.5);
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease,
+    backdrop-filter 200ms ease;
+}
+
+.marketing-header[data-scrolled="true"] {
+  background-color: rgb(var(--c-surface) / 0.78);
+  border-bottom-color: rgb(var(--c-border) / 0.7);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+}
+
+/* ── Hero ──────────────────────────────────────────────────────────────── */
+.marketing-hero-wash {
+  position: absolute;
+  inset: -10% -10% auto -10%;
+  height: 70%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      45rem 30rem at 30% 20%,
+      rgb(var(--c-accent) / 0.18),
+      transparent 65%
+    ),
+    radial-gradient(
+      50rem 35rem at 80% 0%,
+      rgb(var(--c-accent-soft) / 0.16),
+      transparent 60%
+    );
+  filter: blur(8px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .marketing-hero-wash {
+    animation: marketing-drift 22s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes marketing-drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(-2%, 1.5%, 0) scale(1.04);
+  }
+}
+
+/* ── Reveal-on-scroll (Intersection Observer driven) ───────────────────── */
+.marketing-reveal {
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 700ms cubic-bezier(0.2, 0.65, 0.25, 1),
+    transform 700ms cubic-bezier(0.2, 0.65, 0.25, 1);
+}
+
+.marketing-reveal[data-reveal="in"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketing-reveal,
+  .marketing-reveal[data-reveal="in"] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .marketing-hero-wash {
+    animation: none;
+  }
+}
+
+/* ── Canvas mock (hero illustration) ───────────────────────────────────── */
+.canvas-mock {
+  position: relative;
+  border-radius: 1.25rem;
+  border: 1px solid rgb(var(--c-border) / 0.9);
+  background-color: rgb(var(--c-card) / 0.85);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.04) inset,
+    0 30px 60px -30px rgb(20 14 6 / 0.35),
+    0 12px 30px -18px rgb(20 14 6 / 0.25);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.dark .canvas-mock {
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.03) inset,
+    0 30px 60px -28px rgb(0 0 0 / 0.7),
+    0 12px 30px -18px rgb(0 0 0 / 0.55);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .canvas-mock-wave {
+    transform-origin: center;
+    animation: canvas-wave 4.5s ease-in-out infinite;
+  }
+  .canvas-mock-pulse {
+    animation: canvas-pulse 2.6s ease-in-out infinite;
+  }
+}
+
+@keyframes canvas-wave {
+  0%,
+  100% {
+    transform: scaleY(0.55);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes canvas-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ── Mobile nav drawer ─────────────────────────────────────────────────── */
+.marketing-mobile-nav {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background-color: rgb(var(--c-surface) / 0.96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: marketing-fade-in 160ms ease-out;
+}
+
+@keyframes marketing-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketing-mobile-nav {
+    animation: none;
+  }
+}
+
+/* ── Decorative divider (eyebrow ornament) ─────────────────────────────── */
+.marketing-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgb(var(--c-accent));
+}
+
+.marketing-rule::before,
+.marketing-rule::after {
+  content: "";
+  display: inline-block;
+  width: 1.5rem;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    rgb(var(--c-accent) / 0),
+    rgb(var(--c-accent) / 0.7)
+  );
+}
+
+.marketing-rule::after {
+  background: linear-gradient(
+    to right,
+    rgb(var(--c-accent) / 0.7),
+    rgb(var(--c-accent) / 0)
+  );
+}

@@ -1,6 +1,18 @@
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import { App } from "./App";
+import { enableTtsDebugLogging, logTtsDebugHelp } from "./lib/ttsTimeline";
+
+declare global {
+  interface Window {
+  /** Enable `[seneca:tts]` console timeline logs (reload after). */
+    senecaEnableTtsDebug?: () => void;
+    senecaTtsHelp?: () => void;
+  }
+}
+
+window.senecaEnableTtsDebug = enableTtsDebugLogging;
+window.senecaTtsHelp = logTtsDebugHelp;
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element in index.html");
@@ -17,6 +29,17 @@ if (!root) throw new Error("Missing #root element in index.html");
 // effect-cleanup safety checks StrictMode provides, while keeping the
 // Excalidraw subtree on its old, working mount semantics. Re-evaluate
 // when we upgrade Excalidraw past the offending release.
+
+// One-time cleanup of a sessionStorage key we used to write but
+// don't anymore. If a user opened Seneca before we shipped Phase F,
+// they may still carry a stale `seneca:tts-config` that pins
+// `available: false` from before they configured ElevenLabs. Safe
+// to delete unconditionally — `fetchTtsConfig` re-probes on demand.
+try {
+  sessionStorage.removeItem("seneca:tts-config");
+} catch {
+  // sessionStorage may be unavailable (Safari private mode, etc.)
+}
 
 // Surface uncaught errors in the DOM so a blank page is impossible.
 window.addEventListener("error", (e) => {
